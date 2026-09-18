@@ -94,18 +94,22 @@ jobs:
           sudo mv "$bin" /usr/local/bin/apko
           apko version
 
-      - name: Build apko base (${{ matrix.repo }}) — local OCI tarball
-        # Split from the push so a HIGH/CRITICAL scan failure never lands
-        # a bad artefact in GHCR. The tarball is a multi-arch OCI archive
-        # that crane can push verbatim (no rebuild between scan and push).
+      - name: Build apko base (${{ matrix.repo }}) — one OCI tarball per arch
+        # One tarball per arch, not a single `--arch x86_64,aarch64` build:
+        # that emits a multi-image archive, and Trivy's tarball reader
+        # rejects it ("tarball must contain only a single image"). Building
+        # per arch keeps the scan gate on the exact bytes that get pushed —
+        # the multi-arch index is assembled from these two below.
         run: |
-          apko build \
-            --arch x86_64,aarch64 \
-            ${{ matrix.file }} \
-            ${{ env.REGISTRY }}/${{ matrix.repo }}:${{ github.sha }} \
-            image.tar
+          for arch in x86_64 aarch64; do
+            apko build \
+              --arch "$arch" \
+              ${{ matrix.file }} \
+              ${{ env.REGISTRY }}/${{ matrix.repo }}:${{ github.sha }} \
+              "image-$arch.tar"
+          done
 
-      - name: Scan built tarball for HIGH/CRITICAL CVEs (Trivy)
+      - name: Scan x86_64 tarball for HIGH/CRITICAL CVEs (Trivy)
         # Scans the local OCI archive directly, before it ever reaches
         # GHCR. `ignore-unfixed: true` skips CVEs with no upstream fix so
         # builds only break on things we can actually do something about
@@ -113,7 +117,20 @@ jobs:
         # patch.
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          input: image.tar
+          input: image-x86_64.tar
+          format: table
+          exit-code: '1'
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+
+      - name: Scan aarch64 tarball for HIGH/CRITICAL CVEs (Trivy)
+        # Both arches are gated: Wolfi ships arch-specific builds, so a CVE
+        # can be fixed on one and not the other. The vulnerability DB is
+        # cached by the previous step, so this pass is cheap.
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          input: image-aarch64.tar
           format: table
           exit-code: '1'
           severity: 'HIGH,CRITICAL'
@@ -138,17 +155,26 @@ jobs:
         with:
           version: v0.20.2
 
-      - name: Push scan-clean image to GHCR
-        # crane pushes the exact tarball Trivy scanned — no rebuild, no
-        # drift. Multi-arch manifest is preserved.
+      - name: Push scan-clean per-arch images to GHCR
+        # crane pushes the exact tarballs Trivy scanned — no rebuild, no
+        # drift between the scan and what lands in the registry. The
+        # per-arch tags are kept: they cost nothing and make it possible to
+        # pull one arch directly when debugging.
         run: |
-          crane push image.tar ${{ env.REGISTRY }}/${{ matrix.repo }}:${{ github.sha }}
+          for arch in x86_64 aarch64; do
+            crane push "image-$arch.tar" \
+              ${{ env.REGISTRY }}/${{ matrix.repo }}:${{ github.sha }}-$arch
+          done
 
-      - name: Promote to :latest
+      - name: Assemble multi-arch index (:sha and :latest)
+        # Builds the manifest list from the two scanned per-arch images, so
+        # both tags resolve to bytes that passed the gate.
         run: |
           docker buildx imagetools create \
+            -t ${{ env.REGISTRY }}/${{ matrix.repo }}:${{ github.sha }} \
             -t ${{ env.REGISTRY }}/${{ matrix.repo }}:latest \
-            ${{ env.REGISTRY }}/${{ matrix.repo }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ matrix.repo }}:${{ github.sha }}-x86_64 \
+            ${{ env.REGISTRY }}/${{ matrix.repo }}:${{ github.sha }}-aarch64
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v4.1.2
