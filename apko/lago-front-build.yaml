@@ -13,7 +13,7 @@ contents:
     - curl
     - python3
     - nodejs
-    - nodejs-npm
+    - npm
     - pnpm
 
 environment:
