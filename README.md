@@ -17,7 +17,7 @@ an SBOM, and every image is signed with cosign (keyless, via GitHub OIDC).
 | `ghcr.io/getlago/events-processor-base` | minimal runtime | runtime stage of `events-processor` |
 | `ghcr.io/getlago/events-processor-build` | go, rust, cargo | build stage of `events-processor` |
 
-Both are multi-arch (`x86_64`, `aarch64`).
+All are multi-arch (`x86_64`, `aarch64`).
 
 ## Tags
 
