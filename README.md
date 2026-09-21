@@ -52,3 +52,16 @@ permissions and makes provenance visible on the package page.
 for fixable HIGH/CRITICAL CVEs, and only then does crane push the *exact* bytes
 that were scanned. There is no rebuild between scan and push, so nothing can
 drift into the registry unscanned.
+
+### Ignoring fixable CVEs that Wolfi hasn't shipped yet
+
+Sometimes Trivy flags a CVE as fixable because upstream released a patched
+version, but Wolfi hasn't packaged it into its apk repo yet (typical on
+fast-moving trees like `chromium`). Drop those CVE IDs into
+`.trivyignore.d/<manifest-name>` and Trivy will treat them as accepted
+exceptions on both arches until the next successful rebuild.
+
+Every entry needs a comment explaining the source of the CVE and the trigger
+that clears it (usually "Wolfi bumps `<package>` past `<version>`"). Trivy
+silently skips ignore IDs that don't match any current finding, so prune the
+file whenever the daily rebuild passes cleanly.
