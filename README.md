@@ -16,6 +16,8 @@ an SBOM, and every image is signed with cosign (keyless, via GitHub OIDC).
 | `ghcr.io/getlago/lago-front-build` | nodejs, pnpm | build stage of `lago-front` |
 | `ghcr.io/getlago/events-processor-base` | minimal runtime | runtime stage of `events-processor` |
 | `ghcr.io/getlago/events-processor-build` | go, rust, cargo | build stage of `events-processor` |
+| `ghcr.io/getlago/gotenberg-base` | chromium, libreoffice-25.8, openjdk-21-jre, qpdf, exiftool, python-3.11, fonts | runtime stage of `lago-gotenberg` |
+| `ghcr.io/getlago/gotenberg-build` | go-1.26, build-base, git | build stage of `lago-gotenberg` |
 
 All are multi-arch (`x86_64`, `aarch64`).
 

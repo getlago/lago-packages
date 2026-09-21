@@ -1,0 +1,75 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - tzdata
+    - bash
+    - busybox
+    - curl
+    - dumb-init
+    # Chromium — headless browser gotenberg drives for HTML → PDF.
+    - chromium
+    # LibreOffice 25.8 LTS — docx/xlsx/pptx → PDF via `soffice --headless`.
+    # Wolfi ships every sub-tool (writer/calc/impress/draw) in one meta.
+    - libreoffice-25.8
+    # OpenJDK — pdftk-java is a JAR the caller Dockerfile drops in.
+    - openjdk-21-jre
+    # PDF engines gotenberg shells out to.
+    - qpdf
+    - exiftool
+    # unoconverter is a python script that talks to LibreOffice via UNO.
+    - python-3.11
+    # Fonts — same set as upstream gotenberg so LibreOffice/Chromium render
+    # pages identically.
+    - font-liberation
+    - font-noto
+    - font-noto-cjk
+    - font-noto-emoji
+
+accounts:
+  groups:
+    - groupname: nonroot
+      gid: 65532
+  users:
+    - username: nonroot
+      uid: 65532
+      gid: 65532
+  run-as: 65532
+
+environment:
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+  PATH: /usr/local/bin:/usr/bin:/bin
+  # Match upstream gotenberg env-var contract so the binary finds each tool
+  # without extra CLI flags in the pod spec.
+  CHROMIUM_BIN_PATH: /usr/bin/chromium
+  LIBREOFFICE_BIN_PATH: /usr/lib/libreoffice/program/soffice.bin
+  UNOCONVERTER_BIN_PATH: /usr/bin/unoconverter
+  PDFTK_BIN_PATH: /usr/bin/pdftk
+  QPDF_BIN_PATH: /usr/bin/qpdf
+  EXIFTOOL_BIN_PATH: /usr/bin/exiftool
+  PDFCPU_BIN_PATH: /usr/bin/pdfcpu
+  OTEL_TRACES_EXPORTER: none
+  OTEL_METRICS_EXPORTER: none
+  OTEL_LOGS_EXPORTER: none
+
+archs:
+  - x86_64
+  - aarch64
+
+work-dir: /home/nonroot
+
+entrypoint:
+  # dumb-init reaps zombie chromium/soffice subprocesses. The gotenberg
+  # binary itself is dropped in by the consumer Dockerfile and invoked as
+  # the CMD.
+  command: /usr/bin/dumb-init --
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.licenses: MIT
+  org.opencontainers.image.description: Hardened Wolfi-based runtime image for gotenberg (chromium + libreoffice + pdf tools)
