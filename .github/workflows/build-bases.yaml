@@ -109,6 +109,19 @@ jobs:
               "image-$arch.tar"
           done
 
+      - name: Stage per-manifest .trivyignore
+        # Every manifest can carry its own `.trivyignore.d/<name>` file for
+        # CVEs that Trivy flags as fixable but Wolfi hasn't packaged the fix
+        # for yet (typical of fast-moving trees like chromium). Trivy's
+        # `trivyignores` input requires the path to exist, so we `touch` an
+        # empty file for manifests that don't ship one — that keeps the
+        # opt-in surface small and the workflow uniform. Stale entries in
+        # any file are harmless (Trivy silently ignores non-matching IDs)
+        # and should be pruned on the next clean daily rebuild.
+        run: |
+          mkdir -p .trivyignore.d
+          touch ".trivyignore.d/${{ matrix.repo }}"
+
       - name: Scan x86_64 tarball for HIGH/CRITICAL CVEs (Trivy)
         # Scans the local OCI archive directly, before it ever reaches
         # GHCR. `ignore-unfixed: true` skips CVEs with no upstream fix so
@@ -123,6 +136,7 @@ jobs:
           severity: 'HIGH,CRITICAL'
           ignore-unfixed: true
           vuln-type: 'os,library'
+          trivyignores: .trivyignore.d/${{ matrix.repo }}
 
       - name: Scan aarch64 tarball for HIGH/CRITICAL CVEs (Trivy)
         # Both arches are gated: Wolfi ships arch-specific builds, so a CVE
@@ -136,6 +150,7 @@ jobs:
           severity: 'HIGH,CRITICAL'
           ignore-unfixed: true
           vuln-type: 'os,library'
+          trivyignores: .trivyignore.d/${{ matrix.repo }}
 
       - name: Login to GHCR
         # GITHUB_TOKEN + `packages: write` is the only credential needed.
