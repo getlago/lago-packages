@@ -47,6 +47,11 @@ environment:
   # Match upstream gotenberg env-var contract so the binary finds each tool
   # without extra CLI flags in the pod spec.
   CHROMIUM_BIN_PATH: /usr/bin/chromium
+  # gotenberg's chromium module aborts at boot unless this env var is set —
+  # even the presence check fails otherwise. The consumer Dockerfile
+  # (lago-gotenberg) is responsible for staging the hyphen dictionaries
+  # at this path from the gotenberg source tree's build/chromium-hyphen-data.
+  CHROMIUM_HYPHEN_DATA_DIR_PATH: /opt/gotenberg/chromium-hyphen-data
   LIBREOFFICE_BIN_PATH: /usr/lib/libreoffice/program/soffice.bin
   UNOCONVERTER_BIN_PATH: /usr/bin/unoconverter
   PDFTK_BIN_PATH: /usr/bin/pdftk
