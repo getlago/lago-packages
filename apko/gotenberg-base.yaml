@@ -9,7 +9,6 @@ contents:
     - tzdata
     - bash
     - busybox
-    - curl
     - dumb-init
     # Chromium — headless browser gotenberg drives for HTML → PDF.
     - chromium
