@@ -33,6 +33,11 @@ on:
         required: false
         type: string
         default: ""
+      metabase-sha256:
+        description: "Expected sha256 of the metabase.jar for that version. REQUIRED when metabase-version is set. Empty = read from dockerfiles/lago-metabase/METABASE_SHA256."
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -51,8 +56,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve metabase version
+      - name: Resolve metabase version and sha256
         id: version
+        # Both must resolve to non-empty values. An empty sha256 would let a
+        # tampered JAR silently ship — CLAUDE.md at the repo root spells out
+        # the no-unverified-downloads rule this gate enforces.
         run: |
           set -euo pipefail
           if [ -n "${{ inputs.metabase-version }}" ]; then
@@ -60,12 +68,23 @@ jobs:
           else
             version=$(tr -d '[:space:]' < dockerfiles/lago-metabase/METABASE_VERSION)
           fi
+          if [ -n "${{ inputs.metabase-sha256 }}" ]; then
+            sha256="${{ inputs.metabase-sha256 }}"
+          else
+            sha256=$(tr -d '[:space:]' < dockerfiles/lago-metabase/METABASE_SHA256)
+          fi
           if [ -z "$version" ]; then
             echo "::error::metabase version not set (empty input and empty METABASE_VERSION file)"
             exit 1
           fi
+          if [ -z "$sha256" ]; then
+            echo "::error::metabase sha256 not set (empty input and empty METABASE_SHA256 file). See CLAUDE.md."
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
           echo "Building metabase version: $version"
+          echo "Expected sha256:            $sha256"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -88,6 +107,7 @@ jobs:
           docker buildx build \
             --platform linux/amd64 \
             --build-arg METABASE_VERSION=${{ steps.version.outputs.version }} \
+            --build-arg METABASE_SHA256=${{ steps.version.outputs.sha256 }} \
             --tag local/${{ env.IMAGE }}:scan \
             --load \
             dockerfiles/lago-metabase
@@ -115,6 +135,7 @@ jobs:
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --build-arg METABASE_VERSION=${{ steps.version.outputs.version }} \
+            --build-arg METABASE_SHA256=${{ steps.version.outputs.sha256 }} \
             --tag "$image_sha" \
             --tag "$image_ver" \
             --tag "$image_latest" \

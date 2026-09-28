@@ -8,20 +8,29 @@
 # BUILD ARGS
 #   METABASE_VERSION — released tag on downloads.metabase.com (e.g.
 #     v0.63.15). Set at build time by the workflow.
+#   METABASE_SHA256  — expected sha256 of metabase.jar for that version.
+#     REQUIRED. See CLAUDE.md at the repo root: every network fetch in
+#     this repo must be verified against a pinned hash. A version bump
+#     without the matching hash fails fast at build time rather than
+#     silently letting an unverified JAR into the image.
 #   RUNTIME_IMAGE — the apko base to overlay onto. Defaults to :latest
 #     which the daily rebuild in lago-packages keeps ~24h from Wolfi
 #     upstream; pin to a commit SHA for reproducible / air-gapped builds.
 
 ARG RUNTIME_IMAGE=ghcr.io/getlago/lago-metabase-base:latest
 ARG METABASE_VERSION
+ARG METABASE_SHA256
 
 FROM alpine:3 AS fetch
 ARG METABASE_VERSION
+ARG METABASE_SHA256
 RUN test -n "${METABASE_VERSION}" || (echo 'METABASE_VERSION build-arg is required' >&2 && exit 1)
+RUN test -n "${METABASE_SHA256}"  || (echo 'METABASE_SHA256 build-arg is required (see CLAUDE.md — no unverified downloads)' >&2 && exit 1)
 RUN apk add --no-cache curl && \
     curl -fsSL --retry 3 --retry-delay 5 \
       -o /metabase.jar \
-      "https://downloads.metabase.com/${METABASE_VERSION}/metabase.jar"
+      "https://downloads.metabase.com/${METABASE_VERSION}/metabase.jar" && \
+    echo "${METABASE_SHA256}  /metabase.jar" | sha256sum -c -
 
 FROM ${RUNTIME_IMAGE}
 
