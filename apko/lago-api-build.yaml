@@ -16,8 +16,6 @@ contents:
     - ruby-4.0-dev
     - yaml-dev
     - postgresql-dev
-    - postgresql-client
-    - nodejs
     - rust
     - clang-19
     - libclang-cpp-19
@@ -32,4 +30,4 @@ archs:
 
 annotations:
   org.opencontainers.image.source: https://github.com/getlago/lago-packages
-  org.opencontainers.image.description: Wolfi-based builder image for lago-api (ruby-4.0 + headers + rust/cargo)
+  org.opencontainers.image.description: Wolfi-based builder image for lago-api (ruby-4.0 + headers + rust/cargo + clang-19)
