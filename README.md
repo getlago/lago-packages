@@ -10,7 +10,7 @@ an SBOM, and every image is signed with cosign (keyless, via GitHub OIDC).
 
 | Image | Contents | Consumed by |
 | --- | --- | --- |
-| `ghcr.io/getlago/lago-api-base` | ruby-4.0, jemalloc, libpq, pdfcpu, git, postgresql-client | runtime stage of `lago-api` |
+| `ghcr.io/getlago/lago-api-base` | ruby-4.0, jemalloc, libpq, pdfcpu | runtime stage of `lago-api` |
 | `ghcr.io/getlago/lago-api-build` | ruby-4.0 + headers, build-base, rust, nodejs, clang-19 | build stage of `lago-api` |
 | `ghcr.io/getlago/lago-front-base` | nginx, unprivileged (binds an unprivileged port) | runtime stage of `lago-front` |
 | `ghcr.io/getlago/lago-front-build` | nodejs, pnpm | build stage of `lago-front` |
