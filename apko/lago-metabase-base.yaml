@@ -37,16 +37,19 @@ environment:
   LANG: C.UTF-8
   LC_ALL: C.UTF-8
   PATH: /usr/local/bin:/usr/bin:/bin
-  # Metabase reads these to size the JVM. Defaults picked to match the pod's
+  # Metabase reads this to size the JVM. Defaults picked to match the pod's
   # 2Gi limit in charts/lago-base — override at container level (via helm
   # `extraEnv`) if the k8s memory request grows.
   JAVA_OPTS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
-  # Where the metabase JAR gets copied by the consumer Dockerfile.
   MB_JETTY_PORT: "3000"
-  # /plugins is writable so metabase can drop optional driver JARs there
-  # at runtime; the k8s pod mounts an emptyDir there when read-only root
-  # filesystem is on.
-  MB_PLUGINS_DIR: /home/nonroot/plugins
+  # Deliberately no MB_PLUGINS_DIR. Metabase v0.50+ embeds every
+  # first-party database driver (postgres, mysql, redshift, snowflake,
+  # bigquery, …) inside the uberjar; the plugins/ directory only matters
+  # for community drivers. A writable plugin dir on a hardened image is
+  # a runtime code-load surface not covered by the SBOM, so it stays
+  # off. If we ever need a community driver, bake it into the consumer
+  # Dockerfile alongside metabase.jar so the image stays immutable and
+  # every loaded class is scanned.
 
 archs:
   - x86_64

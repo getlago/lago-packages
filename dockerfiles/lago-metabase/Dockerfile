@@ -33,14 +33,13 @@ LABEL org.opencontainers.image.licenses="AGPL-3.0"
 # as nonroot so the entrypoint (which runs as uid 65532) can read it.
 COPY --from=fetch --chown=65532:65532 /metabase.jar /home/nonroot/metabase.jar
 
-# /home/nonroot/plugins is the writable directory Metabase drops
-# optional driver JARs into at runtime. The base image sets
-# MB_PLUGINS_DIR to this path; create it up front so the container
-# doesn't need to mkdir on first boot (harmless if the k8s pod later
-# mounts an emptyDir here for readOnlyRootFilesystem).
-USER root
-RUN install -d -o 65532 -g 65532 -m 0755 /home/nonroot/plugins
-USER 65532
+# No plugins/ directory on purpose. Metabase v0.50+ embeds every
+# first-party database driver inside the uberjar (see the base image's
+# comment on MB_PLUGINS_DIR being deliberately unset). If we ever need
+# a community driver, add a `COPY --chown=65532:65532 my-driver.jar
+# /home/nonroot/plugins/` here and set MB_PLUGINS_DIR at the same time
+# — keeping the loaded classes in the image (and in the SBOM) instead
+# of downloaded at runtime.
 
 EXPOSE 3000
 
