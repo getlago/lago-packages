@@ -12,8 +12,6 @@ contents:
     - ruby-4.0
     - libpq
     - jemalloc
-    - git
-    - postgresql-client
     - pdfcpu
 
 accounts:
