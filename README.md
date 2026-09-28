@@ -20,6 +20,10 @@ an SBOM, and every image is signed with cosign (keyless, via GitHub OIDC).
 | `ghcr.io/getlago/gotenberg-build` | go-1.26, build-base, git | build stage of `lago-gotenberg` |
 | `ghcr.io/getlago/lago-metabase-base` | openjdk-21-jre, fontconfig, Noto/Liberation fonts | runtime for the metabase JAR wrapper |
 | `ghcr.io/getlago/lago-metabase` | above base + upstream metabase JAR (pinned in `dockerfiles/lago-metabase/METABASE_VERSION`) | metabase Deployment |
+| `ghcr.io/getlago/license-base` | ruby-4.0, libpq, make | runtime stage of `lago-license` |
+| `ghcr.io/getlago/license-build` | ruby-4.0 + headers, build-base, postgresql-dev, yaml-dev | build stage of `lago-license` |
+| `ghcr.io/getlago/oauth-proxy-base` | ruby-4.0, make | runtime stage of `lago-oauth-proxy` |
+| `ghcr.io/getlago/oauth-proxy-build` | ruby-4.0 + headers, build-base, yaml-dev | build stage of `lago-oauth-proxy` |
 
 All are multi-arch (`x86_64`, `aarch64`).
 
