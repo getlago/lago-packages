@@ -1,0 +1,23 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    # Go 1.26 matches tools/ratelimit-service/go.mod. Pure static Go,
+    # CGO off, so no build-base / pkgconf / git / bash required.
+    - go-1.26
+
+environment:
+  PATH: /usr/local/bin:/usr/bin:/bin
+  CGO_ENABLED: "0"
+
+archs:
+  - x86_64
+  - aarch64
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Wolfi-based builder image for ratelimit-service (go-1.26, CGO off)
