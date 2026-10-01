@@ -112,6 +112,16 @@ jobs:
             --load \
             dockerfiles/lago-metabase
 
+      - name: Stage .trivyignore
+        # Mirrors build-bases.yaml. The JAR carries library CVEs that only
+        # an upstream Metabase release can fix, so this image needs the same
+        # opt-in ignore file the apko manifests get. `touch` keeps the step
+        # working if the file is ever deleted — Trivy's `trivyignores` input
+        # requires the path to exist.
+        run: |
+          mkdir -p .trivyignore.d
+          touch ".trivyignore.d/${{ env.IMAGE }}"
+
       - name: Scan image for HIGH/CRITICAL CVEs (Trivy)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -121,6 +131,7 @@ jobs:
           severity: "HIGH,CRITICAL"
           ignore-unfixed: true
           vuln-type: "os,library"
+          trivyignores: .trivyignore.d/${{ env.IMAGE }}
 
       - name: Build + push multi-arch image
         id: push
