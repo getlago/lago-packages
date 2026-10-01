@@ -6,8 +6,12 @@ contents:
   packages:
     - wolfi-baselayout
     - ca-certificates-bundle
-    # Go 1.26 matches tools/ratelimit-service/go.mod. Pure static Go,
-    # CGO off, so no build-base / pkgconf / git / bash required.
+    # Docker's `RUN <cmd>` form shells out via /bin/sh; busybox provides it
+    # (and env expansion in `GOOS=$TARGETOS …`). Without this the first RUN
+    # fails with `exec: "/bin/sh": no such file or directory`.
+    - busybox
+    # Go 1.26 matches tools/ratelimit-service/go.mod. Pure static Go, CGO off,
+    # so no build-base / pkgconf / git / bash required.
     - go-1.26
 
 environment:
