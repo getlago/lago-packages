@@ -32,34 +32,75 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
+      has-images: ${{ steps.set.outputs.has-images }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # push: need two commits to diff the range. schedule/dispatch: shallow is fine.
+          fetch-depth: ${{ github.event_name == 'push' && 2 || 1 }}
 
       - name: Compute matrix
         id: set
         run: |
-          if [ -n "${{ inputs.image }}" ]; then
-            files="apko/${{ inputs.image }}.yaml"
-            if [ ! -f "$files" ]; then
-              echo "::error::apko/${{ inputs.image }}.yaml does not exist. Available:"
-              ls apko/*.yaml
-              exit 1
-            fi
-          else
-            files=$(ls apko/*.yaml)
-          fi
+          set -euo pipefail
+          # Three triggers, three selection rules:
+          #   push               — diff the push range and build only changed apko/*.yaml,
+          #                        UNLESS build-bases.yaml itself changed (rebuild everything,
+          #                        since a workflow-level fix should apply to every manifest).
+          #   workflow_dispatch  — explicit `image` input wins; empty = all.
+          #   schedule           — daily CVE pickup, rebuild everything.
+          case "${{ github.event_name }}" in
+            workflow_dispatch)
+              if [ -n "${{ inputs.image }}" ]; then
+                files="apko/${{ inputs.image }}.yaml"
+                if [ ! -f "$files" ]; then
+                  echo "::error::apko/${{ inputs.image }}.yaml does not exist. Available:"
+                  ls apko/*.yaml
+                  exit 1
+                fi
+              else
+                files=$(ls apko/*.yaml)
+              fi
+              ;;
+            push)
+              BEFORE="${{ github.event.before }}"
+              # First-ever push to a new branch surfaces as all-zeroes; fall back
+              # to a full rebuild rather than trying to diff against nothing.
+              if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+                files=$(ls apko/*.yaml)
+              else
+                CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}" -- apko .github/workflows/build-bases.yaml 2>/dev/null || true)
+                if echo "$CHANGED" | grep -qx '\.github/workflows/build-bases\.yaml'; then
+                  # Workflow-level change — rebuild all manifests so the fix lands uniformly.
+                  files=$(ls apko/*.yaml)
+                else
+                  files=$(echo "$CHANGED" | grep -E '^apko/.+\.yaml$' || true)
+                fi
+              fi
+              ;;
+            schedule|*)
+              files=$(ls apko/*.yaml)
+              ;;
+          esac
 
           matrix="["
           for f in $files; do
+            [ -n "$f" ] || continue
             name=$(basename "$f" .yaml)
             matrix+="{\"file\":\"$f\",\"repo\":\"$name\"},"
           done
           matrix="${matrix%,}]"
-          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+          has_images="false"
+          [ "$matrix" != "[]" ] && has_images="true"
+          {
+            echo "matrix=$matrix"
+            echo "has-images=$has_images"
+          } >> $GITHUB_OUTPUT
           echo "$matrix"
 
   build:
     needs: discover
+    if: needs.discover.outputs.has-images == 'true'
     strategy:
       fail-fast: false
       matrix:
