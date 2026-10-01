@@ -1,0 +1,23 @@
+# lago-metabase — CVEs inside the upstream metabase.jar.
+#
+# All three are libraries Metabase bundles in its uberjar. We do not
+# build Metabase from source, so the only lever is the pinned
+# METABASE_VERSION; nothing we can install or patch fixes them today.
+#
+# v0.63.18 (this pin) already cleared the two worst ones from v0.63.15:
+#   netty-handler    4.2.16.Final -> 4.2.17.Final  fixed CVE-2026-75595 (CRITICAL)
+#   jackson-databind 2.21.5       -> 2.21.6        fixed CVE-2026-68497 (HIGH)
+#
+# What is left, with the bundled version and what it would take:
+#
+#   jackson-databind 2.21.6 -> needs 2.21.7 for both entries below.
+#   mssql-jdbc       13.2.1 -> no fixed 13.x published yet. Lago runs
+#     Postgres; the SQL Server driver is bundled by Metabase and never
+#     loaded, so this is not reachable in our deployment.
+#
+# Re-check trigger: clears itself when Metabase ships a release bundling
+# jackson-databind >= 2.21.7. Trivy silently skips entries that match
+# nothing, so a stale line is harmless — prune on the next clean build.
+CVE-2026-91776
+CVE-2026-91777
+CVE-2025-59250
