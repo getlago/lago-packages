@@ -26,6 +26,8 @@ an SBOM, and every image is signed with cosign (keyless, via GitHub OIDC).
 | `ghcr.io/getlago/oauth-proxy-build` | ruby-4.0 + headers, build-base, yaml-dev | build stage of `lago-oauth-proxy` |
 | `ghcr.io/getlago/ratelimit-service-base` | minimal static runtime (ca-certificates, tzdata) | runtime stage of `ratelimit-service` |
 | `ghcr.io/getlago/ratelimit-service-build` | go-1.26 (CGO off) | build stage of `ratelimit-service` |
+| `ghcr.io/getlago/sidekiq-web-base` | ruby-3.4, nonroot | runtime stage of `sidekiq-web` |
+| `ghcr.io/getlago/sidekiq-web-build` | ruby-3.4 + headers, build-base, openssl-dev, yaml-dev | build stage of `sidekiq-web` |
 
 All are multi-arch (`x86_64`, `aarch64`).
 
