@@ -1,8 +1,13 @@
 contents:
   repositories:
     - https://packages.wolfi.dev/os
+    # Lago's melange overlay, synced from S3 by build-bases.yaml. Carries a
+    # chromium newer than Wolfi's; apk resolves `chromium` below to whichever
+    # repo has the higher version, so this self-heals once Wolfi catches up.
+    - ./repo-local
   keyring:
     - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    - ./repo-local/lago-signing.rsa.pub
   packages:
     - wolfi-baselayout
     - ca-certificates-bundle
@@ -11,7 +16,9 @@ contents:
     - busybox
     - curl
     - dumb-init
-    # Chromium — headless browser gotenberg drives for HTML → PDF.
+    # Chromium — headless browser gotenberg drives for HTML → PDF. Resolves to
+    # the overlay's 154 (Chrome for Testing's headless shell) while Wolfi sits
+    # on 149; see getlago/lago-infrastructure packages/chromium.yaml.
     - chromium
     # LibreOffice 25.8 LTS — docx/xlsx/pptx → PDF via `soffice --headless`.
     # Wolfi ships every sub-tool (writer/calc/impress/draw) in one meta.
