@@ -135,6 +135,47 @@ jobs:
           sudo mv "$bin" /usr/local/bin/apko
           apko version
 
+      - name: Does this manifest use the Lago overlay?
+        # Manifests opt in by referencing ./repo-local. Everything else skips the
+        # role assumption and the download entirely, so the other images pay
+        # nothing for this.
+        id: overlay
+        run: |
+          set -euo pipefail
+          if grep -q 'repo-local' "${{ matrix.file }}"; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Assume the packages reader role
+        if: steps.overlay.outputs.needed == 'true'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          # Published as a repo variable by the packages Pulumi project
+          # (getlago/lago-infrastructure, pulumi/projects/packages).
+          role-to-assume: ${{ vars.PACKAGES_READER_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Sync the Lago overlay
+        if: steps.overlay.outputs.needed == 'true'
+        run: |
+          set -euo pipefail
+          # apk resolves <repo>/<arch>/APKINDEX.tar.gz, which is the layout the
+          # bucket already has. Only the packages this repo consumes are pulled.
+          aws s3 sync "s3://lago-wolfi-packages/os/" ./repo-local/ \
+            --exclude "*" \
+            --include "*/APKINDEX.tar.gz" \
+            --include "lago-signing.rsa.pub" \
+            --include "*/chromium-*.apk"
+          # Fail loudly rather than silently falling back to Wolfi's older
+          # package, which would reintroduce the CVEs this overlay exists to fix.
+          test -f ./repo-local/lago-signing.rsa.pub
+          for arch in x86_64 aarch64; do
+            test -f "./repo-local/$arch/APKINDEX.tar.gz"
+          done
+          du -sh ./repo-local
+
       - name: Build apko base (${{ matrix.repo }}) — one OCI tarball per arch
         # One tarball per arch, not a single `--arch x86_64,aarch64` build:
         # that emits a multi-image archive, and Trivy's tarball reader
