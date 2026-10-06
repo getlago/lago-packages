@@ -48,12 +48,21 @@ paths:
     gid: 65532
 
 environment:
-  PATH: /app/.venv/bin:/usr/local/bin:/usr/bin:/bin
+  # $JAVA_HOME/bin MUST be on PATH, not just JAVA_HOME. No Wolfi JRE package
+  # installs a /usr/bin/java — the binary only ever exists at
+  # /usr/lib/jvm/java-NN-openjdk/bin/java, and there is no alternatives symlink
+  # like the Debian openjdk-17-jre-headless package provides.
+  #
+  # Beam resolves the JVM through PATH, not JAVA_HOME: its
+  # apache_beam/utils/subprocess_server.py calls subprocess.Popen(['java',
+  # ...]) to launch the Java IO expansion service. With JAVA_HOME set but the
+  # bin dir off PATH, that raises
+  #   FileNotFoundError: [Errno 2] No such file or directory: 'java'
+  # at pipeline.run(), which is how this was found — the submitter Job failed
+  # on lago-staging-eu-1 after the first rollout of this base.
+  PATH: /app/.venv/bin:/usr/local/bin:/usr/bin:/bin:/usr/lib/jvm/java-17-openjdk/bin
   PYTHONUNBUFFERED: "1"
   PYTHONPATH: /app/src
-  # Beam's JavaJarExpansionService shells out to `java`; be explicit rather
-  # than relying on the openjdk package's profile.d script, which only a login
-  # shell would source.
   JAVA_HOME: /usr/lib/jvm/java-17-openjdk
 
 archs:
