@@ -1,0 +1,60 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - tzdata
+    - glibc
+    - libgcc
+    # libssl.so.3 + libcrypto.so.3 for the dynamically linked openssl-sys.
+    # Wolfi patches these daily, which is the whole point of not vendoring
+    # OpenSSL into the binary.
+    #
+    # `libssl3` and not `openssl` / `openssl-3.6`:
+    #   - the unversioned `openssl` resolves to 4.0 (openssl-4.0 declares
+    #     provides: openssl=4.0.x, which outranks the real 3.6.5 package) and
+    #     ships only libssl.so.4. openssl-sys 0.9.109 — what mcp's Cargo.lock
+    #     pins — has no OpenSSL 4 support, so the build links .so.3 and a 4.0
+    #     runtime fails at exec with a missing shared object.
+    #   - `openssl-3.6` is the CLI meta-package. We want the library, not a
+    #     shell-adjacent binary in a hardened runtime.
+    #
+    # KNOWN WART: libssl3 depends on libcrypto3, which depends on
+    # openssl-provider-legacy-allowed, which pulls openssl-4.0-libssl and
+    # openssl-4.0-libcrypto. So the image currently carries BOTH majors and
+    # roughly double the OpenSSL CVE surface. There is no package combination
+    # in the current Wolfi tree that yields libssl.so.3 without this
+    # (openssl-hardened-3.6 ships no libraries at all — it is a marker
+    # package). The real fix is to drop OpenSSL from the binary entirely by
+    # moving reqwest onto rustls, which the dep tree already contains; that is
+    # an app-level Cargo change, tracked separately.
+    - libssl3
+
+accounts:
+  groups:
+    - groupname: nonroot
+      gid: 65532
+  users:
+    - username: nonroot
+      uid: 65532
+      gid: 65532
+  run-as: 65532
+
+archs:
+  - x86_64
+  - aarch64
+
+work-dir: /app
+
+entrypoint:
+  # The transport ("sse") is supplied as CMD by the consumer Dockerfile so it
+  # stays overridable per deployment without rebuilding.
+  command: /app/lago-mcp-server
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.licenses: MIT
+  org.opencontainers.image.description: Hardened Wolfi-based runtime image for lago-mcp-server

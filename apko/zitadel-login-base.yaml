@@ -1,0 +1,66 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - tzdata
+    # Must match the major in zitadel-login-build.yaml: Next.js standalone
+    # output bundles native bindings resolved against the build's node ABI.
+    - nodejs-22
+    # Next.js standalone ships an entrypoint.sh. Unlike the prequel image we
+    # cannot go shell-free here — dropping busybox makes the container exit
+    # with "no such file or directory" on a shebang that cannot be resolved.
+    - busybox
+
+accounts:
+  groups:
+    - groupname: nonroot
+      gid: 65532
+  users:
+    - username: nonroot
+      uid: 65532
+      gid: 65532
+  run-as: 65532
+
+paths:
+  # Upstream's entrypoint reads /.env-file/.env unconditionally and fails if
+  # the path is absent. Created here (rather than with a RUN in the consumer
+  # Dockerfile) so the hardened base stays the single owner of the filesystem
+  # contract and the Dockerfile needs no root stage at all.
+  - path: /.env-file
+    type: directory
+    permissions: 0o755
+    uid: 65532
+    gid: 65532
+  - path: /.env-file/.env
+    type: empty-file
+    permissions: 0o644
+    uid: 65532
+    gid: 65532
+
+environment:
+  PATH: /usr/local/bin:/usr/bin:/bin
+  HOSTNAME: "0.0.0.0"
+  PORT: "3000"
+  NODE_ENV: production
+  # --use-openssl-ca makes node trust the Wolfi CA bundle below rather than
+  # its own compiled-in store.
+  NODE_OPTIONS: "--use-openssl-ca --require /app/load-ssl-cert-dir.cjs"
+  SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+  ZITADEL_TLS_ENABLED: "false"
+  OTEL_SERVICE_NAME: zitadel-login
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+
+archs:
+  - x86_64
+  - aarch64
+
+work-dir: /app
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.licenses: Apache-2.0
+  org.opencontainers.image.description: Hardened Wolfi-based nodejs-22 runtime image for the Lago-branded zitadel login app

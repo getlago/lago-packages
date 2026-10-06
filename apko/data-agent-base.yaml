@@ -1,0 +1,43 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - tzdata
+    # Same interpreter, same path as data-agent-build. The venv copied out of
+    # the build stage hard-codes this path in pyvenv.cfg and in each console
+    # script's shebang, so the two images must not drift apart.
+    - python-3.13
+
+accounts:
+  groups:
+    - groupname: nonroot
+      gid: 65532
+  users:
+    - username: nonroot
+      uid: 65532
+      gid: 65532
+  run-as: 65532
+
+environment:
+  PATH: /app/.venv/bin:/usr/local/bin:/usr/bin:/bin
+  # Unbuffered so container logs stream in real time instead of blocking in
+  # the stdio buffer until the process exits.
+  PYTHONUNBUFFERED: "1"
+  # No .pyc writes: the filesystem is read-only in practice for uid 65532 and
+  # the bytecode cache would only produce permission noise on import.
+  PYTHONDONTWRITEBYTECODE: "1"
+
+archs:
+  - x86_64
+  - aarch64
+
+work-dir: /app
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.licenses: AGPL-3.0
+  org.opencontainers.image.description: Hardened Wolfi-based python-3.13 runtime image for lago-data-agent
