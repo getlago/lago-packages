@@ -1,0 +1,72 @@
+# Runtime for the rev_rec Beam pipeline. Replaces
+# `apache/beam_python3.13_sdk:2.76.0`, which is Debian-based and ships the
+# entire Google Cloud SDK.
+#
+# This is NOT a Beam SDK harness container and does not need to be. Both roles
+# that use it invoke python directly — the submitter Job runs `python -m run`
+# and the TaskManager sidecar runs
+# `python -m apache_beam.runners.worker.worker_pool_main` (see
+# lago-helm-charts/charts/lago-data-rev-rec). The pipeline uses
+# `--environment_type=EXTERNAL`, so Flink dials the sidecar's worker pool and
+# Beam's /opt/apache/beam/boot binary is never executed. Nothing here has to
+# reimplement the harness container contract.
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - tzdata
+    # Must match rev-rec-build.yaml — the copied .venv records this path.
+    - python-3.13
+    # JavaJarExpansionService spawns a JVM in the submitter pod to run the
+    # Beam Java IO expansion service jar (KafkaIO's cross-language transform).
+    # Headless JRE is enough; nothing renders. Kept at 17 to match
+    # Dockerfile.flink's flink:1.20.3-java17.
+    - openjdk-17-jre
+
+accounts:
+  groups:
+    - groupname: nonroot
+      gid: 65532
+  users:
+    - username: nonroot
+      uid: 65532
+      gid: 65532
+  run-as: 65532
+
+paths:
+  # Where the consumer Dockerfile drops
+  # beam-sdks-java-io-expansion-service.jar. Owned by nonroot so the layout
+  # matches the uid the pipeline runs as.
+  - path: /opt/apache/beam/jars
+    type: directory
+    permissions: 0o755
+    uid: 65532
+    gid: 65532
+
+environment:
+  PATH: /app/.venv/bin:/usr/local/bin:/usr/bin:/bin
+  PYTHONUNBUFFERED: "1"
+  PYTHONPATH: /app/src
+  # Beam's JavaJarExpansionService shells out to `java`; be explicit rather
+  # than relying on the openjdk package's profile.d script, which only a login
+  # shell would source.
+  JAVA_HOME: /usr/lib/jvm/java-17-openjdk
+
+archs:
+  - x86_64
+  - aarch64
+
+work-dir: /app
+
+# No entrypoint: both roles supply an explicit `command:` in their manifests.
+# This replaces the `ENTRYPOINT []` override the old Dockerfile needed to
+# neutralise the upstream Beam SDK harness entrypoint.
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.licenses: AGPL-3.0
+  org.opencontainers.image.description: Hardened Wolfi-based python-3.13 + JRE17 runtime image for the rev-rec Beam pipeline

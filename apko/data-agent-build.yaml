@@ -1,0 +1,42 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - bash
+    - busybox
+    - build-base
+    # The agent vendors lago-api's app/models via a sparse clone, so git is a
+    # build-time requirement and the separate alpine/git stage goes away.
+    - git
+    - curl
+    - python-3.13
+    # Headers for any sdist in the tree that still needs a C build. Most of
+    # the dependency set ships wheels; this is cheap insurance in the build
+    # image, which never ships.
+    - python-3.13-dev
+    # Wolfi packages uv, so the Dockerfile no longer needs
+    # `COPY --from=ghcr.io/astral-sh/uv`.
+    - uv
+
+environment:
+  PATH: /usr/local/bin:/usr/bin:/bin
+  # Bind the venv to the DISTRO interpreter rather than letting uv download a
+  # managed CPython. This is load-bearing for the hardening: a uv-managed
+  # interpreter lives under ~/.local/share/uv and Wolfi's daily rebuild can
+  # never patch it, so CVEs in CPython itself would sit there forever. It also
+  # keeps the venv's recorded interpreter path valid when .venv is copied into
+  # data-agent-base, which ships the same /usr/bin/python3.13.
+  UV_PYTHON_PREFERENCE: only-system
+  UV_PYTHON: /usr/bin/python3.13
+
+archs:
+  - x86_64
+  - aarch64
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Wolfi-based builder image for lago-data-agent (python-3.13 + uv + git)

@@ -1,0 +1,40 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - bash
+    - busybox
+    - build-base
+    - git
+    - curl
+    - pkgconf
+    # `rust` is a virtual satisfied by the newest rust-1.NN. lago-mcp-server is
+    # edition 2024, so anything from 1.85 up works and we want the newest.
+    - rust
+    # reqwest pulls hyper-tls -> native-tls -> openssl-sys, which links against
+    # the system OpenSSL rather than vendoring it. Without the headers the
+    # cargo build fails in openssl-sys's build script, not at link time.
+    #
+    # Pinned to the 3.6 series on purpose. The unversioned `openssl-dev`
+    # resolves to 4.0, because openssl-4.0-dev declares `provides:
+    # openssl-dev=4.0.x` which outranks the real 3.6.5 package. openssl-sys
+    # 0.9.109 (what Cargo.lock pins) has no OpenSSL 4 support and its build
+    # script aborts on the unrecognised version. Must stay in lockstep with
+    # `openssl-3.6` in mcp-server-base.yaml — a soname mismatch between the
+    # two is a runtime failure, not a build one.
+    - openssl-3.6-dev
+
+environment:
+  PATH: /usr/local/bin:/usr/bin:/bin:/root/.cargo/bin
+
+archs:
+  - x86_64
+  - aarch64
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Wolfi-based builder image for lago-mcp-server (rust + openssl headers)
