@@ -14,7 +14,6 @@ contents:
     - tzdata
     - bash
     - busybox
-    - curl
     - dumb-init
     # Chromium — headless browser gotenberg drives for HTML → PDF. Resolves to
     # the overlay's 154 (Chrome for Testing's headless shell) while Wolfi sits
