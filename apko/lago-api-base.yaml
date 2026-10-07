@@ -15,6 +15,10 @@ contents:
     - git
     - postgresql-client
     - pdfcpu
+    # Container healthchecks in the OSS docker-compose shell out to curl
+    # (`curl -f http://localhost:3000/health`). Wolfi's busybox ships no
+    # wget applet, so without this the image has no HTTP client at all.
+    - curl
 
 accounts:
   groups:
@@ -39,8 +43,10 @@ archs:
 
 work-dir: /app
 
-entrypoint:
-  command: /app/scripts/start.sh
+# No `entrypoint:` on purpose. This is a base, and the images built on it run
+# several different processes (api, worker, clock, migrate). An ENTRYPOINT here
+# is inherited and demotes every downstream `command:` to an argument, which
+# silently broke the OSS docker-compose in v1.54.0. Downstream sets CMD.
 
 annotations:
   org.opencontainers.image.source: https://github.com/getlago/lago-packages
