@@ -1,0 +1,49 @@
+# Runtime for lago-connectors — a trimmed redpanda-connect binary.
+#
+# Replaces docker.redpanda.com/redpandadata/connect, which ships every
+# component Redpanda Connect has (~80 packages: amqp, postgres, mongodb,
+# snowflake, thrift, git...). We run four: aws_sqs, aws_kinesis, http_server
+# and kafka_franz. The unused ones are where most of the image's CVEs live —
+# amqp091-go and pgx/v5 alone accounted for 5 critical findings in connectors
+# nothing in getlago/lago's configs references.
+#
+# The binary is built CGO_ENABLED=0, so this image needs no libc at all.
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    # TLS to SQS/Kinesis/Kafka and to any https output.
+    - ca-certificates-bundle
+    # Connect configs use time-based batching/windowing; without tzdata any
+    # non-UTC timezone in a config resolves to UTC and silently shifts windows.
+    - tzdata
+
+accounts:
+  groups:
+    - groupname: nonroot
+      gid: 65532
+  users:
+    - username: nonroot
+      uid: 65532
+      gid: 65532
+  run-as: 65532
+
+archs:
+  - x86_64
+  - aarch64
+
+# The configs live here and the deployment invokes `run ./sqs.yml`, so the
+# relative path in the pod command resolves against this directory.
+work-dir: /app
+
+# No entrypoint: every connector Deployment supplies an explicit
+# `command: [/redpanda-connect, run, ./<config>.yml]`, matching the path the
+# upstream image used so no chart values change.
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.licenses: Apache-2.0
+  org.opencontainers.image.description: Hardened Wolfi runtime for a trimmed redpanda-connect build (lago-connectors)

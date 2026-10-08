@@ -1,0 +1,32 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - bash
+    - busybox
+    - build-base
+    # The build fetches the redpanda-connect module tree from the proxy, so
+    # git and curl are here for `go mod` and any vcs-backed dependency.
+    - git
+    - curl
+    # connect v4.78.0 declares `go 1.26.6`, so the toolchain must be >= that
+    # or the build fails before compiling anything.
+    - go
+
+environment:
+  PATH: /usr/local/bin:/usr/bin:/bin
+  # Pure-Go build: no cgo in the component set we compile (aws, kafka, io,
+  # pure). Keeping CGO off is what lets the runtime base stay libc-free.
+  CGO_ENABLED: "0"
+
+archs:
+  - x86_64
+  - aarch64
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Wolfi-based builder image for lago-connectors (go, static redpanda-connect build)
