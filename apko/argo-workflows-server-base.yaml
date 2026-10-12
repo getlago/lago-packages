@@ -1,0 +1,36 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    # `argo server` dials the Kubernetes API and OIDC endpoints over TLS.
+    - ca-certificates-bundle
+    # Cron schedules and workflow timestamps are rendered in local time.
+    - tzdata
+
+accounts:
+  groups:
+    - groupname: argo
+      gid: 8737
+  users:
+    - username: argo
+      uid: 8737
+      gid: 8737
+  run-as: 8737
+
+archs:
+  - x86_64
+  - aarch64
+
+# Upstream argoproj/argocli runs from /home/argo as uid 8737. Keeping both
+# means the Lago image stays a drop-in for the chart's securityContext.
+work-dir: /home/argo
+
+entrypoint:
+  command: /bin/argo
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Hardened Wolfi-based runtime image for argo-workflows-server

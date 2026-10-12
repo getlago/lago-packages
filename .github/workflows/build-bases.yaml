@@ -189,7 +189,12 @@ jobs:
               ${{ matrix.file }} \
               ${{ env.REGISTRY }}/${{ matrix.repo }}:${{ github.sha }} \
               "image-$arch.tar"
+            # apko writes sbom-<arch>.spdx.json next to the tarball on every
+            # build. Keep it under a per-arch name so the second pass cannot
+            # clobber the first, and so the attest step below can find it.
+            mv "sbom-$arch.spdx.json" "sbom-${{ matrix.repo }}-$arch.spdx.json"
           done
+          ls -la sbom-*.spdx.json
 
       - name: Stage per-manifest .trivyignore
         # Every manifest can carry its own `.trivyignore.d/<name>` file for
@@ -286,3 +291,34 @@ jobs:
         run: |
           cosign sign ${{ env.REGISTRY }}/${{ matrix.repo }}:${{ github.sha }}
           cosign sign ${{ env.REGISTRY }}/${{ matrix.repo }}:latest
+
+      - name: Attach the SBOMs as cosign attestations
+        # apko has always produced an SPDX SBOM per arch; until now the
+        # workflow threw it away, so the README's "every package has an SBOM"
+        # was only true inside the build. Attest each per-arch SBOM to its own
+        # per-arch image: that is the digest a puller actually resolves to, so
+        # `cosign verify-attestation` works for whichever arch it pulled.
+        #
+        #   cosign verify-attestation --type spdxjson \
+        #     ghcr.io/getlago/<repo>:<sha>-x86_64 \
+        #     --certificate-identity-regexp '^https://github.com/getlago/lago-packages/' \
+        #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+          for arch in x86_64 aarch64; do
+            cosign attest \
+              --predicate "sbom-${{ matrix.repo }}-$arch.spdx.json" \
+              --type spdxjson \
+              ${{ env.REGISTRY }}/${{ matrix.repo }}:${{ github.sha }}-$arch
+          done
+
+      - name: Upload the SBOMs as build artifacts
+        # Same bytes as the attestation, reachable without cosign — useful when
+        # answering "which version of X shipped in this image" from a browser.
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.repo }}
+          path: sbom-${{ matrix.repo }}-*.spdx.json
+          retention-days: 90
