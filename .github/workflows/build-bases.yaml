@@ -6,6 +6,10 @@ on:
     paths:
       - "apko/**"
       - ".github/workflows/build-bases.yaml"
+    paths-ignore:
+      # The record job commits these back; without the exclusion every build
+      # would retrigger the next one.
+      - "apko/**.lock.json"
   schedule:
     # Daily, to pick up Wolfi upstream package updates (CVE patches, etc.).
     # Wolfi publishes multiple times a day; daily keeps `:latest` within a
@@ -191,6 +195,40 @@ jobs:
               "image-$arch.tar"
           done
 
+      # apko writes an SPDX SBOM next to each tarball by default and this
+      # workflow discarded it. It is the only authoritative record of which
+      # package versions went into a given build, so keep it: the record job
+      # turns it into a committed, diffable manifest.
+      - name: Collect resolved package set
+        run: |
+          mkdir -p manifests
+          python3 - <<'PYEOF'
+          import glob, json, os
+          pkgs = {}
+          for f in glob.glob("sbom-*.spdx.json") + glob.glob("*.spdx.json"):
+              with open(f) as fh:
+                  doc = json.load(fh)
+              for p in doc.get("packages", []):
+                  name, ver = p.get("name"), p.get("versionInfo")
+                  if name and ver:
+                      pkgs[name] = ver
+          repo = os.environ["REPO"]
+          out = {"image": repo, "packages": dict(sorted(pkgs.items()))}
+          with open(f"manifests/{repo}.lock.json", "w") as fh:
+              json.dump(out, fh, indent=2, sort_keys=True)
+              fh.write("\n")
+          print(f"{repo}: {len(pkgs)} packages")
+          PYEOF
+        env:
+          REPO: ${{ matrix.repo }}
+
+      - name: Upload resolved package set
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-${{ matrix.repo }}
+          path: manifests/${{ matrix.repo }}.lock.json
+          retention-days: 7
+
       - name: Stage per-manifest .trivyignore
         # Every manifest can carry its own `.trivyignore.d/<name>` file for
         # CVEs that Trivy flags as fixable but Wolfi hasn't packaged the fix
@@ -286,3 +324,53 @@ jobs:
         run: |
           cosign sign ${{ env.REGISTRY }}/${{ matrix.repo }}:${{ github.sha }}
           cosign sign ${{ env.REGISTRY }}/${{ matrix.repo }}:latest
+
+  # One commit per workflow run rather than one per matrix leg, so 27 parallel
+  # jobs cannot race each other on the same branch.
+  record:
+    name: Record resolved package sets
+    needs: build
+    if: github.ref == 'refs/heads/main' && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Download every manifest
+        uses: actions/download-artifact@v4
+        with:
+          pattern: manifest-*
+          merge-multiple: true
+          path: incoming
+
+      - name: Commit the ones that changed
+        run: |
+          mkdir -p apko
+          changed=0
+          for f in incoming/*.lock.json; do
+            [ -e "$f" ] || continue
+            dest="apko/$(basename "$f")"
+            if ! cmp -s "$f" "$dest"; then
+              cp "$f" "$dest"
+              changed=1
+              echo "updated $dest"
+            fi
+          done
+
+          if [ "$changed" = "0" ]; then
+            echo "No package versions moved."
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apko/*.lock.json
+          git commit -m "chore(apko): record resolved package versions" \
+                     -m "Generated from the SBOM apko emits during the build. Build output is" \
+                     -m "unchanged — these manifests record what Wolfi resolved, they do not" \
+                     -m "constrain it."
+          git push origin main
+
