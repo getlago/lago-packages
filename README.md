@@ -34,6 +34,8 @@ an SBOM, and every image is signed with cosign (keyless, via GitHub OIDC).
 | `ghcr.io/getlago/rev-rec-build` | python-3.13 + headers, uv, build-base | build stage of `rev-rec` |
 | `ghcr.io/getlago/sidekiq-web-base` | ruby-3.4, nonroot | runtime stage of `sidekiq-web` |
 | `ghcr.io/getlago/sidekiq-web-build` | ruby-3.4 + headers, build-base, openssl-dev, yaml-dev | build stage of `sidekiq-web` |
+| `ghcr.io/getlago/argo-workflows-server-base` | minimal runtime (ca-certificates, tzdata), argo uid 8737 | runtime stage of `argo-workflows-server` |
+| `ghcr.io/getlago/argo-workflows-server-build` | go-1.26, nodejs-20, yarn, git, patch, make, bash, build-base | build stages of `argo-workflows-server` |
 | `ghcr.io/getlago/zitadel-login-base` | nodejs-22, busybox, nonroot | runtime stage of the Lago-branded zitadel login app |
 | `ghcr.io/getlago/zitadel-login-build` | nodejs-22, pnpm, git, patch, build-base | build stage of the zitadel login app |
 
@@ -53,6 +55,21 @@ and `:latest` picks them up without anyone opening a PR.
 cosign verify ghcr.io/getlago/lago-api-base:latest \
   --certificate-identity-regexp '^https://github.com/getlago/lago-packages/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+### SBOMs
+
+apko emits an SPDX SBOM per arch on every build. Each one is attached to its
+per-arch image as a cosign attestation, and uploaded as a workflow artifact
+(90 days). Attest against the **per-arch** tag — that is the digest a puller
+resolves to:
+
+```sh
+cosign verify-attestation --type spdxjson \
+  ghcr.io/getlago/lago-api-base:latest-x86_64 \
+  --certificate-identity-regexp '^https://github.com/getlago/lago-packages/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  | jq -r '.payload | @base64d | fromjson | .predicate.name'
 ```
 
 ## Adding an image

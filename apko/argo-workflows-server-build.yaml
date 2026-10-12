@@ -1,0 +1,40 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    # Docker's `RUN <cmd>` form shells out via /bin/sh, and upstream's
+    # Makefile is a bash script in practice (`[[ ]]`, `set -o pipefail`).
+    - busybox
+    - bash
+    # The build clones argo-workflows at a tag and applies lago-sso.patch.
+    - git
+    - patch
+    # `make dist/argo` drives the Go build and the STATIC_FILES packing.
+    - make
+    # go-1.26 matches upstream's golang:1.26.x pin. Wolfi currently ships
+    # 1.26.9, which carries the stdlib CVE fixes the old alpine build lacked.
+    - go-1.26
+    # The `argo` binary embeds the SPA, so the UI has to be built first.
+    # Upstream builds it on node:20-alpine with yarn — same pair here.
+    - nodejs-20
+    - yarn
+    # cgo is on for the server build (upstream installs gcc/libc-dev).
+    - build-base
+
+environment:
+  PATH: /usr/local/bin:/usr/bin:/bin
+  # Keep yarn's cache inside the build stage so a BuildKit cache mount can
+  # hold it; upstream sets the same variable.
+  YARN_CACHE_FOLDER: /root/.yarn
+
+archs:
+  - x86_64
+  - aarch64
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Wolfi-based builder image for argo-workflows-server (go-1.26, nodejs-20, yarn)
