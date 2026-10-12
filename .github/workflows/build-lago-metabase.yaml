@@ -112,6 +112,69 @@ jobs:
             --load \
             dockerfiles/lago-metabase
 
+      - name: Smoke test (boot the image under the deployed security profile)
+        # The scan proves the bytes are clean; it never proves they run. This
+        # image shipped a `CMD ["java", ...]` against a base whose PATH did not
+        # include the JVM bin directory, so every build passed Trivy and cosign
+        # while the container died at init with exit 127. Boot it here instead.
+        #
+        # Runs with the same flags the pod uses - non-root, read-only rootfs,
+        # all capabilities dropped - so a regression in either the PATH or the
+        # MB_PLUGINS_DIR handling fails the build rather than the rollout.
+        run: |
+          set -euo pipefail
+          docker network create mb-smoke
+          docker run -d --name mb-smoke-db --network mb-smoke \
+            -e POSTGRES_USER=mb -e POSTGRES_PASSWORD=mb -e POSTGRES_DB=mb \
+            postgres:16-alpine
+          for i in $(seq 1 30); do
+            docker exec mb-smoke-db pg_isready -U mb >/dev/null 2>&1 && break
+            sleep 2
+          done
+
+          # Fails with exit 127 if `java` is not resolvable on PATH.
+          docker run --rm --entrypoint /bin/bash local/${{ env.IMAGE }}:scan \
+            -c 'command -v java && java -version'
+
+          docker run -d --name mb-smoke-app --network mb-smoke \
+            --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /tmp:rw,noexec,nosuid,size=256m \
+            -e MB_DB_TYPE=postgres -e MB_DB_HOST=mb-smoke-db -e MB_DB_PORT=5432 \
+            -e MB_DB_DBNAME=mb -e MB_DB_USER=mb -e MB_DB_PASS=mb \
+            local/${{ env.IMAGE }}:scan
+
+          ok=""
+          for i in $(seq 1 60); do
+            if docker logs mb-smoke-app 2>&1 | grep -q 'Metabase Initialization COMPLETE'; then
+              ok=1; break
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' mb-smoke-app)" != "true" ]; then
+              break
+            fi
+            sleep 5
+          done
+
+          if [ -z "$ok" ]; then
+            echo "::error::metabase did not reach 'Initialization COMPLETE' under the deployed security profile"
+            docker logs mb-smoke-app 2>&1 | tail -40
+            exit 1
+          fi
+
+          code=$(docker run --rm --network mb-smoke curlimages/curl:latest \
+            -s -o /dev/null -w '%{http_code}' http://mb-smoke-app:3000/api/health)
+          test "$code" = "200" || {
+            echo "::error::/api/health returned $code, expected 200"
+            docker logs mb-smoke-app 2>&1 | tail -40
+            exit 1
+          }
+          echo "smoke test passed: Initialization COMPLETE, /api/health 200"
+
+      - name: Tear down smoke test
+        if: always()
+        run: |
+          docker rm -f mb-smoke-app mb-smoke-db >/dev/null 2>&1 || true
+          docker network rm mb-smoke >/dev/null 2>&1 || true
+
       - name: Stage .trivyignore
         # Mirrors build-bases.yaml. The JAR carries library CVEs that only
         # an upstream Metabase release can fix, so this image needs the same

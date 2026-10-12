@@ -42,12 +42,19 @@ LABEL org.opencontainers.image.licenses="AGPL-3.0"
 # as nonroot so the entrypoint (which runs as uid 65532) can read it.
 COPY --from=fetch --chown=65532:65532 /metabase.jar /home/nonroot/metabase.jar
 
-# No plugins/ directory on purpose. Metabase v0.50+ embeds every
-# first-party database driver inside the uberjar (see the base image's
-# comment on MB_PLUGINS_DIR being deliberately unset). If we ever need
-# a community driver, add a `COPY --chown=65532:65532 my-driver.jar
-# /home/nonroot/plugins/` here and set MB_PLUGINS_DIR at the same time
-# — keeping the loaded classes in the image (and in the SBOM) instead
+# No plugins/ directory baked in. Metabase v0.50+ embeds every first-party
+# database driver inside the uberjar, so the directory only ever needs to
+# exist — it never needs contents.
+#
+# It does need to EXIST and be writable, though: metabase asserts that at
+# startup and refuses to boot otherwise. The base points MB_PLUGINS_DIR at
+# /tmp/plugins for exactly this reason; mount an empty tmpfs / emptyDir at
+# /tmp in the deployment. An empty directory loads nothing, so there is no
+# runtime code-load surface outside the SBOM.
+#
+# If we ever need a community driver, add a `COPY --chown=65532:65532
+# my-driver.jar /home/nonroot/plugins/` here and override MB_PLUGINS_DIR to
+# match — keeping the loaded classes in the image (and in the SBOM) instead
 # of downloaded at runtime.
 
 EXPOSE 3000
