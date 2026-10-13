@@ -47,11 +47,29 @@ All are multi-arch (`x86_64`, `aarch64`).
 
 ## Tags
 
-- `:<commit-sha>` — immutable, one artifact forever. Pin to this for reproducible builds.
-- `:latest` — moves with `main`. Rebuilt daily so it stays within ~24h of upstream Wolfi.
+- `:<YYYYMMDD>-r<run>` — immutable, one per publish. Pin to this (or to the digest) for reproducible builds.
+- `:<commit-sha>` — immutable: set only the first time a commit publishes.
+- `:latest` — the newest publish. Rebuilt daily so it stays within ~24h of upstream Wolfi.
+- `:<YYYYMMDD>-r<run>-<arch>`, `:latest-<arch>` — the per-arch images behind the tags above.
 
 The daily rebuild is the point: Wolfi publishes CVE patches multiple times a day,
 and `:latest` picks them up without anyone opening a PR.
+
+apko builds are reproducible, so a rebuild with the same apk set gives the same
+digest. A base is published only when its digest changes. The `notify` job
+then sends a `base-updated` `repository_dispatch` to `getlago/lago-deploy` and
+`getlago/lago-infrastructure`, with this payload:
+
+```json
+{"bases": [{"name": "lago-api-base", "image": "ghcr.io/getlago/lago-api-base",
+            "tag": "20261014-r123", "digest": "sha256:…"}],
+ "run": "https://github.com/getlago/lago-packages/actions/runs/…"}
+```
+
+Those repos rebuild the images they deploy on the new digest and bump their
+GitOps tags. The dispatch needs the `BASE_UPDATE_DISPATCH_TOKEN` secret (a
+token with `contents: write` on both repos). Without it, the job warns and the
+consumers pick the change up on their own daily schedule.
 
 ## Verifying
 
