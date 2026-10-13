@@ -54,18 +54,13 @@ and `:latest` picks them up without anyone opening a PR.
 apko builds are reproducible, so a rebuild with the same apk set gives the same
 digest. A base is published only when its digest changes. The `notify` job
 then sends a `base-updated` `repository_dispatch` to `getlago/lago-deploy` and
-`getlago/lago-infrastructure`, with this payload:
+`getlago/lago-infrastructure`. There, `base-refresh plan`
+([lago-infrastructure `tools/base-refresh`](https://github.com/getlago/lago-infrastructure/tree/main/tools/base-refresh))
+rebuilds the deployed images on the new digests and bumps their GitOps tags.
 
-```json
-{"bases": [{"name": "lago-api-base", "image": "ghcr.io/getlago/lago-api-base",
-            "tag": "20261014-r123", "digest": "sha256:…"}],
- "run": "https://github.com/getlago/lago-packages/actions/runs/…"}
-```
-
-Those repos rebuild the images they deploy on the new digest and bump their
-GitOps tags. The dispatch needs the `BASE_UPDATE_DISPATCH_TOKEN` secret (a
-token with `contents: write` on both repos). Without it, the job warns and the
-consumers pick the change up on their own daily schedule.
+The dispatch needs the `BASE_UPDATE_DISPATCH_TOKEN` secret (a token with
+`contents: write` on both repos). The consumers also run daily, so a missed
+dispatch only delays a refresh.
 
 ## Verifying
 
