@@ -257,52 +257,94 @@ jobs:
         with:
           version: v0.20.2
 
+      - name: Compare with the published :latest
+        # apko builds are reproducible: with the same apk set, the per-arch
+        # digest does not move. A changed digest therefore means a real package
+        # change, and it is the signal consumers rebuild on. An unchanged image
+        # skips the push, the signing and the dispatch.
+        id: diff
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ matrix.repo }}
+        run: |
+          set -euo pipefail
+          changed=false
+          for pair in x86_64:amd64 aarch64:arm64; do
+            arch=${pair%%:*} platform=${pair##*:}
+            built=$(crane digest --tarball "image-$arch.tar")
+            published=$(crane digest --platform "linux/$platform" "$IMAGE:latest" 2>/dev/null || echo none)
+            echo "$arch: built=$built published=$published"
+            [ "$built" = "$published" ] || changed=true
+          done
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          if [ "$changed" = false ]; then
+            echo "::notice::${{ matrix.repo }} is unchanged, nothing to publish"
+          fi
+
       - name: Push scan-clean per-arch images to GHCR
         # crane pushes the exact tarballs Trivy scanned — no rebuild, no
         # drift between the scan and what lands in the registry. The
-        # per-arch tags are kept: they cost nothing and make it possible to
-        # pull one arch directly when debugging.
+        # per-arch tags make it possible to pull one arch directly when
+        # debugging, and to verify the per-arch SBOM attestation.
+        if: steps.diff.outputs.changed == 'true'
+        id: push
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ matrix.repo }}
         run: |
+          set -euo pipefail
+          # Unique per run and sortable. `:<sha>` alone cannot be the immutable
+          # tag: the daily schedule runs on an unchanged HEAD, so it would move.
+          tag="$(date -u +%Y%m%d)-r${GITHUB_RUN_NUMBER}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           for arch in x86_64 aarch64; do
-            crane push "image-$arch.tar" \
-              ${{ env.REGISTRY }}/${{ matrix.repo }}:${{ github.sha }}-$arch
+            crane push "image-$arch.tar" "$IMAGE:$tag-$arch"
+            crane tag "$IMAGE:$tag-$arch" "latest-$arch"
           done
 
-      - name: Assemble multi-arch index (:sha and :latest)
+      - name: Assemble multi-arch index
         # Builds the manifest list from the two scanned per-arch images, so
-        # both tags resolve to bytes that passed the gate.
+        # every tag resolves to bytes that passed the gate. `:<sha>` is set
+        # only the first time a commit publishes, so it stays immutable.
+        if: steps.diff.outputs.changed == 'true'
+        id: index
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ matrix.repo }}
+          TAG: ${{ steps.push.outputs.tag }}
         run: |
-          docker buildx imagetools create \
-            -t ${{ env.REGISTRY }}/${{ matrix.repo }}:${{ github.sha }} \
-            -t ${{ env.REGISTRY }}/${{ matrix.repo }}:latest \
-            ${{ env.REGISTRY }}/${{ matrix.repo }}:${{ github.sha }}-x86_64 \
-            ${{ env.REGISTRY }}/${{ matrix.repo }}:${{ github.sha }}-aarch64
+          set -euo pipefail
+          tags=(-t "$IMAGE:$TAG" -t "$IMAGE:latest")
+          if crane digest "$IMAGE:${{ github.sha }}" >/dev/null 2>&1; then
+            echo "$IMAGE:${{ github.sha }} exists, leaving it in place"
+          else
+            tags+=(-t "$IMAGE:${{ github.sha }}")
+          fi
+          docker buildx imagetools create "${tags[@]}" \
+            "$IMAGE:$TAG-x86_64" "$IMAGE:$TAG-aarch64"
+          echo "digest=$(crane digest "$IMAGE:$TAG")" >> "$GITHUB_OUTPUT"
 
       - name: Install cosign
+        if: steps.diff.outputs.changed == 'true'
         uses: sigstore/cosign-installer@v4.1.2
         with:
           cosign-release: v3.1.3
 
       - name: Sign base image (keyless via GH OIDC)
-        # Signs both the SHA-pinned tag and :latest so pulls can verify
-        # against the same key material regardless of which tag they used.
+        # Signs the index digest, which covers every tag pointing at it.
+        if: steps.diff.outputs.changed == 'true'
         env:
           COSIGN_YES: "true"
         run: |
-          cosign sign ${{ env.REGISTRY }}/${{ matrix.repo }}:${{ github.sha }}
-          cosign sign ${{ env.REGISTRY }}/${{ matrix.repo }}:latest
+          cosign sign "${{ env.REGISTRY }}/${{ matrix.repo }}@${{ steps.index.outputs.digest }}"
 
       - name: Attach the SBOMs as cosign attestations
-        # apko has always produced an SPDX SBOM per arch; until now the
-        # workflow threw it away, so the README's "every package has an SBOM"
-        # was only true inside the build. Attest each per-arch SBOM to its own
-        # per-arch image: that is the digest a puller actually resolves to, so
-        # `cosign verify-attestation` works for whichever arch it pulled.
+        # Attest each per-arch SBOM to its own per-arch image: that is the
+        # digest a puller actually resolves to, so `cosign verify-attestation`
+        # works for whichever arch it pulled.
         #
         #   cosign verify-attestation --type spdxjson \
-        #     ghcr.io/getlago/<repo>:<sha>-x86_64 \
+        #     ghcr.io/getlago/<repo>:latest-x86_64 \
         #     --certificate-identity-regexp '^https://github.com/getlago/lago-packages/' \
         #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+        if: steps.diff.outputs.changed == 'true'
         env:
           COSIGN_YES: "true"
         run: |
@@ -311,14 +353,94 @@ jobs:
             cosign attest \
               --predicate "sbom-${{ matrix.repo }}-$arch.spdx.json" \
               --type spdxjson \
-              ${{ env.REGISTRY }}/${{ matrix.repo }}:${{ github.sha }}-$arch
+              "${{ env.REGISTRY }}/${{ matrix.repo }}:${{ steps.push.outputs.tag }}-$arch"
           done
 
       - name: Upload the SBOMs as build artifacts
         # Same bytes as the attestation, reachable without cosign — useful when
         # answering "which version of X shipped in this image" from a browser.
+        if: steps.diff.outputs.changed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: sbom-${{ matrix.repo }}
           path: sbom-${{ matrix.repo }}-*.spdx.json
           retention-days: 90
+
+      - name: Record the change for the notify job
+        # Matrix jobs cannot share outputs, so each changed image leaves a
+        # one-line artifact that `notify` merges.
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          mkdir -p changed
+          jq -nc \
+            --arg name "${{ matrix.repo }}" \
+            --arg image "${{ env.REGISTRY }}/${{ matrix.repo }}" \
+            --arg tag "${{ steps.push.outputs.tag }}" \
+            --arg digest "${{ steps.index.outputs.digest }}" \
+            '{name: $name, image: $image, tag: $tag, digest: $digest}' > "changed/${{ matrix.repo }}.json"
+
+      - name: Upload the change record
+        if: steps.diff.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: changed-${{ matrix.repo }}
+          path: changed/${{ matrix.repo }}.json
+          retention-days: 7
+
+  notify:
+    # Tells the consumer repos which bases moved, so they rebuild the images
+    # they deploy on the new digests. Runs even when one base failed its scan:
+    # the others published, and their consumers should still pick them up.
+    # The consumers also poll on a schedule, so a missed dispatch only delays
+    # the refresh by a day.
+    needs: build
+    if: ${{ !cancelled() && needs.build.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Collect the changed bases
+        # No artifact matches when nothing changed. That is not an error.
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: changed-*
+          path: changed
+          merge-multiple: true
+
+      - name: Build the payload
+        id: payload
+        run: |
+          set -euo pipefail
+          if ! ls changed/*.json >/dev/null 2>&1; then
+            echo "No base changed on this run."
+            echo "bases=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          bases=$(jq -sc 'sort_by(.name)' changed/*.json)
+          echo "bases=$bases" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Changed bases"
+            echo
+            jq -r '.[] | "- `\(.image):\(.tag)` `\(.digest)`"' <<<"$bases"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dispatch base-updated to the consumers
+        if: steps.payload.outputs.bases != '[]'
+        env:
+          # Needs `contents: write` on each target repo, which GITHUB_TOKEN
+          # cannot grant across repositories.
+          GH_TOKEN: ${{ secrets.BASE_UPDATE_DISPATCH_TOKEN }}
+          BASES: ${{ steps.payload.outputs.bases }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::BASE_UPDATE_DISPATCH_TOKEN is not set. Consumers pick the change up on their next scheduled run."
+            exit 0
+          fi
+          for repo in getlago/lago-deploy getlago/lago-infrastructure; do
+            jq -nc --argjson bases "$BASES" --arg run "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+              '{event_type: "base-updated", client_payload: {bases: $bases, run: $run}}' \
+              | gh api "repos/$repo/dispatches" --input -
+            echo "Dispatched base-updated to $repo"
+          done
