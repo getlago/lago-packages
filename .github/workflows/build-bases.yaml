@@ -391,35 +391,33 @@ jobs:
           retention-days: 90
 
       - name: Record the change for the notify job
-        # Matrix jobs cannot share outputs: `notify` merges these artifacts.
+        # Matrix jobs cannot share outputs: `notify` looks for these markers.
         if: steps.diff.outputs.changed == 'true'
-        run: |
-          mkdir -p changed
-          jq -nc \
-            --arg name "${{ matrix.repo }}" \
-            --arg image "${{ env.REGISTRY }}/${{ matrix.repo }}" \
-            --arg tag "${{ steps.push.outputs.tag }}" \
-            --arg digest "${{ steps.index.outputs.digest }}" \
-            '{name: $name, image: $image, tag: $tag, digest: $digest}' > "changed/${{ matrix.repo }}.json"
+        run: mkdir -p changed && touch "changed/${{ matrix.repo }}"
 
-      - name: Upload the change record
+      - name: Upload the change marker
         if: steps.diff.outputs.changed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: changed-${{ matrix.repo }}
-          path: changed/${{ matrix.repo }}.json
+          path: changed/${{ matrix.repo }}
           retention-days: 7
 
   notify:
-    # Runs even when one base failed: the others still published.
+    # Tells the consumers a base moved; their `base-refresh plan` reads the
+    # new digests itself. Runs even when one base failed: the others published.
     needs: build
     if: ${{ !cancelled() && needs.build.result != 'skipped' }}
     runs-on: ubuntu-latest
-    permissions:
-      actions: read
+    strategy:
+      matrix:
+        repository: [getlago/lago-deploy, getlago/lago-infrastructure]
+    env:
+      # Without it the consumers catch up on their daily run.
+      HAS_TOKEN: ${{ secrets.BASE_UPDATE_DISPATCH_TOKEN != '' }}
     steps:
-      - name: Collect the changed bases
-        # No artifact matches when nothing changed. That is not an error.
+      - name: Collect the change markers
+        # No marker matches when nothing changed. That is not an error.
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
@@ -427,38 +425,12 @@ jobs:
           path: changed
           merge-multiple: true
 
-      - name: Build the payload
-        id: payload
-        run: |
-          set -euo pipefail
-          if ! ls changed/*.json >/dev/null 2>&1; then
-            echo "No base changed on this run."
-            echo "bases=[]" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          bases=$(jq -sc 'sort_by(.name)' changed/*.json)
-          echo "bases=$bases" >> "$GITHUB_OUTPUT"
-          {
-            echo "## Changed bases"
-            echo
-            jq -r '.[] | "- `\(.image):\(.tag)` `\(.digest)`"' <<<"$bases"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Dispatch base-updated to the consumers
-        if: steps.payload.outputs.bases != '[]'
-        env:
-          # Cross-repo `contents: write`; GITHUB_TOKEN cannot do it.
-          GH_TOKEN: ${{ secrets.BASE_UPDATE_DISPATCH_TOKEN }}
-          BASES: ${{ steps.payload.outputs.bases }}
-        run: |
-          set -euo pipefail
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::warning::BASE_UPDATE_DISPATCH_TOKEN is not set. Consumers pick the change up on their next scheduled run."
-            exit 0
-          fi
-          for repo in getlago/lago-deploy getlago/lago-infrastructure; do
-            jq -nc --argjson bases "$BASES" --arg run "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-              '{event_type: "base-updated", client_payload: {bases: $bases, run: $run}}' \
-              | gh api "repos/$repo/dispatches" --input -
-            echo "Dispatched base-updated to $repo"
-          done
+      # Cross-repo `contents: write`; GITHUB_TOKEN cannot do it.
+      - name: Dispatch base-updated
+        if: env.HAS_TOKEN == 'true' && hashFiles('changed/*') != ''
+        uses: peter-evans/repository-dispatch@v4
+        with:
+          token: ${{ secrets.BASE_UPDATE_DISPATCH_TOKEN }}
+          repository: ${{ matrix.repository }}
+          event-type: base-updated
+          client-payload: '{"run": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}'
