@@ -1,0 +1,101 @@
+package:
+  name: ruby-4.0
+  version: 4.0.6
+  epoch: 0
+  description: Ruby 4.x — Lago build. Consumed by lago-api's apko base images.
+  copyright:
+    - license: Ruby
+    - license: BSD-2-Clause
+  dependencies:
+    runtime:
+      - ca-certificates-bundle
+      - yaml
+      - openssl-config
+      - zlib
+
+environment:
+  contents:
+    keyring:
+      - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    repositories:
+      - https://packages.wolfi.dev/os
+    packages:
+      - autoconf
+      - bison
+      - build-base
+      - busybox
+      - ca-certificates-bundle
+      - libffi-dev
+      - yaml-dev
+      - openssl-dev
+      - readline-dev
+      - zlib-dev
+      - jemalloc-dev
+      - rust
+
+var-transforms:
+  - from: ${{package.version}}
+    match: ^(\d+\.\d+)\..*$
+    replace: "$1"
+    to: mm-ver
+
+pipeline:
+  - uses: fetch
+    with:
+      uri: https://cache.ruby-lang.org/pub/ruby/${{vars.mm-ver}}/ruby-${{package.version}}.tar.gz
+      expected-sha256: 837d299e8f7ddf2be31a229a7a7e019d354979825117989acb3b32b1a9be262a
+
+  - runs: |
+      ./configure \
+        --prefix=/usr \
+        --sysconfdir=/etc \
+        --enable-shared \
+        --disable-install-doc \
+        --enable-yjit \
+        --with-jemalloc \
+        --with-openssl-dir=/usr
+
+  - uses: autoconf/make
+
+  - uses: autoconf/make-install
+
+  - uses: strip
+
+subpackages:
+  - name: ruby-4.0-dev
+    description: Headers and libraries for Ruby 4 native extensions
+    pipeline:
+      - uses: split/dev
+    dependencies:
+      runtime:
+        - ${{package.name}}
+        - libffi-dev
+        - yaml-dev
+        - openssl-dev
+        - readline-dev
+        - zlib-dev
+
+  - name: ruby-4.0-doc
+    description: Man pages for Ruby 4
+    pipeline:
+      - uses: split/manpages
+
+update:
+  enabled: true
+  release-monitor:
+    identifier: 1580
+
+test:
+  environment:
+    contents:
+      packages:
+        - ${{package.name}}
+        - ${{package.name}}-dev
+        - build-base
+  pipeline:
+    - runs: |
+        ruby --version | grep "ruby ${{package.version}}"
+        ruby -e 'puts "Hello from #{RUBY_VERSION}"'
+        gem --version
+        ruby -e 'require "openssl"; puts OpenSSL::VERSION'
+        ruby -e 'require "yaml"; puts YAML.dump({ok: true})'

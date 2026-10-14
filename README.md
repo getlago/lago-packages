@@ -1,7 +1,9 @@
 # lago-packages
 
 Hardened [Wolfi](https://github.com/wolfi-dev)-based base images for Lago, built
-with [apko](https://github.com/chainguard-dev/apko) and published to GHCR.
+with [apko](https://github.com/chainguard-dev/apko) and published to GHCR, plus
+the few [melange](https://github.com/chainguard-dev/melange) recipes that build
+the apks Wolfi does not ship for us.
 
 These images carry no shell history, no apt, no distro cruft. Every package has
 an SBOM, and every image is signed with cosign (keyless, via GitHub OIDC).
@@ -81,7 +83,67 @@ Set `org.opencontainers.image.source` to this repository. GHCR uses that
 annotation to link the package back to its source, which is what inherits repo
 permissions and makes provenance visible on the package page.
 
+## The package overlay (`packages/`)
+
+Wolfi carries almost everything our images need. `packages/` holds a melange
+recipe for each exception — today only `chromium`, where Wolfi is months behind
+the CVE fixes gotenberg needs, and `ruby-4.0`, which Wolfi has since caught up
+on. Each recipe builds an apk for both arches, signed with the Lago melange key
+and published to the private S3 bucket `lago-wolfi-packages`.
+
+A manifest opts into the overlay by naming it as a repository:
+
+```yaml
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+    - ./repo-local
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    - ./repo-local/lago-signing.rsa.pub
+```
+
+`./repo-local` is the marker the workflow greps for. A manifest without it never
+assumes the AWS role and never downloads the overlay.
+
+**apk installs the highest version it can see.** The overlay sits beside Wolfi,
+it does not replace it, so a recipe only wins while its version is above Wolfi's.
+That is deliberate for `chromium` and it is why the workflow's `aws s3 sync`
+pulls an explicit allowlist of apks rather than the whole bucket.
+
+### Changing a recipe
+
+Edit `packages/<name>.yaml` and push. Two workflows run, in order:
+
+1. `build-packages.yaml` builds the apk on both arches, re-signs the index and
+   publishes to S3.
+2. `build-bases.yaml` starts on `workflow_run` and rebuilds every manifest that
+   names `./repo-local`.
+
+So one merge produces the new `ghcr.io/getlago/<base>:<sha>` tag. Pin that tag in
+the consuming repo and you are done.
+
+The chaining is the point. Both workflows watch `main`, so a recipe push that
+also touched `apko/` would otherwise rebuild the image beside the package build
+and sync the apk the bucket held *before* the merge.
+
+The daily cron rebuilds images only. A recipe pins one upstream version, so
+rebuilding it on a timer would republish identical bytes.
+
+### Key material
+
+The signing key is a `tls.PrivateKey` owned by the `packages` Pulumi project in
+`getlago/lago-infrastructure`. That project generates it, mirrors it to
+1Password, writes the private half to this repo as the `MELANGE_SIGNING_KEY`
+Actions secret, publishes the public half to `s3://lago-wolfi-packages/os/` for
+apko's keyring, and publishes the bucket role ARN here as `PACKAGES_ROLE_ARN`.
+Nothing in this repo creates or rotates it.
+
 ## Build pipeline
+
+`build-packages.yaml` builds apks, `build-bases.yaml` builds images and chains
+off it. Inside `build-bases.yaml`, `discover` picks the manifests this event
+needs and `build` runs the matrix over them.
 
 `apko build` produces a local multi-arch OCI tarball, Trivy scans that tarball
 for fixable HIGH/CRITICAL CVEs, and only then does crane push the *exact* bytes
