@@ -17,7 +17,7 @@ contents:
     - curl
     - dumb-init
     # Chromium — headless browser gotenberg drives for HTML → PDF. Resolves to
-    # the overlay's 154 (Chrome for Testing's headless shell) while Wolfi sits
+    # the overlay's 155 (Chrome for Testing's headless shell) while Wolfi sits
     # on 149; see getlago/lago-infrastructure packages/chromium.yaml.
     - chromium
     # LibreOffice 25.8 LTS — docx/xlsx/pptx → PDF via `soffice --headless`.
