@@ -1,0 +1,119 @@
+name: Build Wolfi packages
+
+# Builds the melange recipes under packages/ into apks and publishes them to the
+# private overlay bucket. build-bases.yaml then runs on `workflow_run`, so the
+# images that install an overlay package are rebuilt from the apk this run just
+# published — one merge, two runs.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/**"
+      - ".github/workflows/build-packages.yaml"
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Recipe basename to build (e.g. `chromium`). Empty = every recipe under packages/.'
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  PACKAGES_BUCKET: lago-wolfi-packages
+
+jobs:
+  build:
+    name: Package (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: linux-arm64
+    runs-on: ${{ matrix.runner }}
+    # The Chainguard melange image is too minimal for GitHub Actions to
+    # bootstrap a container job into it (missing tail, node runtime, ...), so
+    # install the melange binary on the runner instead and invoke it directly.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install melange
+        uses: chainguard-dev/actions/setup-melange@v1.6.40
+
+      - name: Assume the packages role
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          # Published as a repo variable by the packages Pulumi project
+          # (getlago/lago-infrastructure, pulumi/projects/packages).
+          role-to-assume: ${{ vars.PACKAGES_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Write the signing key
+        env:
+          MELANGE_SIGNING_KEY: ${{ secrets.MELANGE_SIGNING_KEY }}
+        run: |
+          if [ -z "$MELANGE_SIGNING_KEY" ]; then
+            echo '::error::MELANGE_SIGNING_KEY secret is not set. The packages Pulumi project writes it; run pulumi up on that project.'
+            exit 1
+          fi
+          printf '%s' "$MELANGE_SIGNING_KEY" > lago-signing.rsa
+          chmod 600 lago-signing.rsa
+
+      - name: Sync the existing packages (so unchanged apks stay in the index)
+        run: |
+          mkdir -p out/${{ matrix.arch }}
+          aws s3 sync "s3://${PACKAGES_BUCKET}/os/${{ matrix.arch }}/" "out/${{ matrix.arch }}/" \
+            --exclude "APKINDEX.tar.gz"
+
+      - name: Build the packages
+        env:
+          # Empty on push events; set only when workflow_dispatch names one
+          # recipe. Every recipe is cheap enough to rebuild that a push does not
+          # bother diffing — melange rewrites the apk in place either way.
+          PACKAGE: ${{ inputs.package }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PACKAGE" ]; then
+            recipes=("packages/${PACKAGE}.yaml")
+            if [ ! -f "${recipes[0]}" ]; then
+              echo "::error::Recipe ${recipes[0]} does not exist. Available:"
+              ls packages/*.yaml 2>/dev/null || echo "(no recipes)"
+              exit 1
+            fi
+          else
+            recipes=(packages/*.yaml)
+          fi
+
+          for recipe in "${recipes[@]}"; do
+            [ -e "$recipe" ] || continue
+            echo "::group::melange build $recipe (${{ matrix.arch }})"
+            melange build "$recipe" \
+              --arch ${{ matrix.arch }} \
+              --signing-key lago-signing.rsa \
+              --out-dir out
+            echo "::endgroup::"
+          done
+
+      - name: Rebuild and sign the APKINDEX
+        working-directory: out/${{ matrix.arch }}
+        run: |
+          melange index -o APKINDEX.tar.gz.unsigned *.apk
+          melange sign-index --signing-key ../../lago-signing.rsa APKINDEX.tar.gz.unsigned
+          mv APKINDEX.tar.gz.unsigned APKINDEX.tar.gz
+
+      - name: Publish to S3
+        run: |
+          aws s3 sync "out/${{ matrix.arch }}/" "s3://${PACKAGES_BUCKET}/os/${{ matrix.arch }}/" \
+            --exclude "lago-signing.rsa*"
+
+# The signing pubkey is published to s3://<bucket>/os/lago-signing.rsa.pub by the
+# packages Pulumi project (aws.s3.BucketObject), not this workflow — Pulumi owns
+# the tls.PrivateKey, so it owns publishing its public half.

@@ -6,6 +6,13 @@ on:
     paths:
       - "apko/**"
       - ".github/workflows/build-bases.yaml"
+  workflow_run:
+    # build-packages.yaml publishes the apks the overlay consumers install. A
+    # push that changes a recipe must not rebuild those images in parallel —
+    # it would sync the apk the bucket held before the merge. Chaining on the
+    # package run instead makes one merge produce one correct base tag.
+    workflows: ["Build Wolfi packages"]
+    types: [completed]
   schedule:
     # Daily, to pick up Wolfi upstream package updates (CVE patches, etc.).
     # Wolfi publishes multiple times a day; daily keeps `:latest` within a
@@ -26,9 +33,14 @@ permissions:
 
 env:
   REGISTRY: ghcr.io/getlago
+  AWS_REGION: us-east-1
+  PACKAGES_BUCKET: lago-wolfi-packages
 
 jobs:
   discover:
+    # A failed package build publishes nothing, so there is no new apk to
+    # rebuild anything from.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
@@ -43,11 +55,15 @@ jobs:
         id: set
         run: |
           set -euo pipefail
-          # Three triggers, three selection rules:
+          # Four triggers, four selection rules:
           #   push               — diff the push range and build only changed apko/*.yaml,
           #                        UNLESS build-bases.yaml itself changed (rebuild everything,
           #                        since a workflow-level fix should apply to every manifest).
           #   workflow_dispatch  — explicit `image` input wins; empty = all.
+          #   workflow_run       — build-packages.yaml just published new apks, so rebuild
+          #                        every manifest that opts into the overlay. They mark
+          #                        themselves by naming ./repo-local, the same grep the
+          #                        build job runs below.
           #   schedule           — daily CVE pickup, rebuild everything.
           case "${{ github.event_name }}" in
             workflow_dispatch)
@@ -78,6 +94,9 @@ jobs:
                 fi
               fi
               ;;
+            workflow_run)
+              files=$(grep -l 'repo-local' apko/*.yaml || true)
+              ;;
             schedule|*)
               files=$(ls apko/*.yaml)
               ;;
@@ -106,6 +125,14 @@ jobs:
       matrix:
         include: ${{ fromJson(needs.discover.outputs.matrix) }}
     runs-on: ubuntu-latest
+    # Two runs can want the same image: a recipe push rebuilds its consumers
+    # through workflow_run, and an apko change in the same merge rebuilds them
+    # through push. Both end with `crane push` to one repo, so without this the
+    # last writer wins and that may be the older one. The later run is always
+    # the better one — it sees the apk the package build just published.
+    concurrency:
+      group: base-${{ matrix.repo }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
 
@@ -148,22 +175,27 @@ jobs:
             echo "needed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Assume the packages reader role
+      - name: Assume the packages role
         if: steps.overlay.outputs.needed == 'true'
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          # Published as a repo variable by the packages Pulumi project
-          # (getlago/lago-infrastructure, pulumi/projects/packages).
-          role-to-assume: ${{ vars.PACKAGES_READER_ROLE_ARN }}
-          aws-region: us-east-1
+          # Same role build-packages.yaml writes with. OIDC trust is per
+          # repository, so a separate read-only role for this job would buy no
+          # isolation.
+          role-to-assume: ${{ vars.PACKAGES_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Sync the Lago overlay
         if: steps.overlay.outputs.needed == 'true'
         run: |
           set -euo pipefail
           # apk resolves <repo>/<arch>/APKINDEX.tar.gz, which is the layout the
-          # bucket already has. Only the packages this repo consumes are pulled.
-          aws s3 sync "s3://lago-wolfi-packages/os/" ./repo-local/ \
+          # bucket already has. The allowlist below is deliberate: apk installs
+          # the highest version it can see, so an overlay apk no manifest asks
+          # for is either inert (older than Wolfi's) or a silent shadow of
+          # Wolfi's (newer). Add an --include line only for a package a manifest
+          # really installs from the overlay.
+          aws s3 sync "s3://${PACKAGES_BUCKET}/os/" ./repo-local/ \
             --exclude "*" \
             --include "*/APKINDEX.tar.gz" \
             --include "lago-signing.rsa.pub" \
