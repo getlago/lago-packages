@@ -1,0 +1,2 @@
+# apko writes these into the cwd on every local build.
+sbom-*.spdx.json

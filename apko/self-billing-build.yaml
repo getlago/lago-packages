@@ -1,0 +1,35 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    # The Dockerfile's RUN steps need a shell.
+    - busybox
+    - python-3.13
+    # Wolfi packages uv, so the Dockerfile needs no
+    # `COPY --from=ghcr.io/astral-sh/uv`. Every dependency in the lock ships a
+    # manylinux wheel for both arches, so there is no build-base and no
+    # python-3.13-dev here. Add them only if a dependency starts to need an
+    # sdist build.
+    - uv
+
+environment:
+  PATH: /usr/local/bin:/usr/bin:/bin
+  # Bind the venv to the DISTRO interpreter rather than letting uv download a
+  # managed CPython. A uv-managed interpreter lives under ~/.local/share/uv and
+  # Wolfi's daily rebuild can never patch it. It also keeps the venv's recorded
+  # interpreter path valid when .venv is copied into self-billing-base, which
+  # ships the same /usr/bin/python3.13.
+  UV_PYTHON_PREFERENCE: only-system
+  UV_PYTHON: /usr/bin/python3.13
+
+archs:
+  - x86_64
+  - aarch64
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Wolfi-based builder image for lago-self-billing (python-3.13 + uv)

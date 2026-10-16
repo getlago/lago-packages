@@ -1,0 +1,50 @@
+# Runtime for the lago-self-billing monthly CronJob. Replaces
+# `python:3.11-slim`, which is Debian-based, ships a shell and apt, and runs as
+# root unless the Dockerfile adds a user.
+#
+# The job is a single `python app.py` process that only opens outbound
+# connections (read-replica Postgres and ClickHouse, HTTPS APIs). It needs
+# CA certificates for TLS and nothing else. No shell, no busybox.
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - tzdata
+    # Must match self-billing-build.yaml — the copied .venv records this path
+    # in pyvenv.cfg and in each console script's shebang.
+    - python-3.13
+
+accounts:
+  groups:
+    - groupname: nonroot
+      gid: 65532
+  users:
+    - username: nonroot
+      uid: 65532
+      gid: 65532
+  run-as: 65532
+
+environment:
+  PATH: /app/.venv/bin:/usr/local/bin:/usr/bin:/bin
+  # Unbuffered so the CronJob's logs stream in real time instead of blocking in
+  # the stdio buffer until the process exits.
+  PYTHONUNBUFFERED: "1"
+  # No .pyc writes: the pod runs with a read-only root filesystem, so the
+  # bytecode cache would only produce permission noise on import.
+  PYTHONDONTWRITEBYTECODE: "1"
+
+archs:
+  - x86_64
+  - aarch64
+
+work-dir: /app
+
+# No entrypoint: the consumer Dockerfile sets `ENTRYPOINT ["python", "app.py"]`.
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Hardened Wolfi-based python-3.13 runtime image for lago-self-billing
