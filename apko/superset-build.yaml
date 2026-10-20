@@ -1,0 +1,31 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - busybox
+    - build-base
+    # Superset 6.1 supports Python 3.10 to 3.12.
+    - python-3.12
+    - python-3.12-dev
+    - uv
+    # The dev stage generates a self-signed certificate.
+    - openssl
+
+environment:
+  PATH: /usr/local/bin:/usr/bin:/bin
+  # Bind the venv to the Wolfi interpreter, not a uv-managed CPython that the
+  # daily rebuild cannot patch. See data-agent-build.yaml.
+  UV_PYTHON_PREFERENCE: only-system
+  UV_PYTHON: /usr/bin/python3.12
+
+archs:
+  - x86_64
+  - aarch64
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Wolfi-based builder image for Superset (python-3.12 + uv)
