@@ -1,0 +1,58 @@
+# Runtime for Superset (web and Celery worker). Replaces `apache/superset`,
+# which is Debian-based, runs Python 3.10 and resolves part of its Python
+# dependencies outside our lockfile.
+#
+# Superset comes from the `apache-superset` wheel, pinned in lago-data's
+# uv.lock with every other Python package. No shell: run.py execs gunicorn and
+# celery directly.
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - tzdata
+    # Must match superset-build.yaml: the copied .venv records this path.
+    - python-3.12
+    # manylinux wheels (pyarrow, pandas, numpy) link against these and do not
+    # bundle them.
+    - libstdc++
+    - libgcc
+
+accounts:
+  groups:
+    - groupname: nonroot
+      gid: 65532
+  users:
+    - username: nonroot
+      uid: 65532
+      gid: 65532
+  run-as: 65532
+
+paths:
+  # run.py writes the inline Superset config here at startup.
+  - path: /app/superset_home
+    type: directory
+    permissions: 0o755
+    uid: 65532
+    gid: 65532
+
+environment:
+  PATH: /app/.venv/bin:/usr/local/bin:/usr/bin:/bin
+  PYTHONUNBUFFERED: "1"
+  SUPERSET_HOME: /app/superset_home
+  FLASK_APP: superset.app:create_app()
+
+archs:
+  - x86_64
+  - aarch64
+
+work-dir: /app
+
+# No entrypoint: the consumer Dockerfile sets CMD to run.py.
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Hardened Wolfi-based python-3.12 runtime image for Superset
