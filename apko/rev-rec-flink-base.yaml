@@ -1,0 +1,76 @@
+# Runtime for the rev_rec FlinkDeployment (JobManager and TaskManager pods).
+# Replaces `flink:1.20.3-java17`, which is Ubuntu-based: 312 of the 339 Wiz
+# findings on data/rev-rec:flink-defd3b1 were Ubuntu OS packages.
+#
+# Flink comes from the Lago overlay (packages/flink-1.20.yaml): Wolfi ships
+# Flink 2.x only, and Beam's FlinkRunner supports 1.20 at most.
+#
+# The consumer Dockerfile (lago-data rev_rec/Dockerfile.flink) adds Beam's Java
+# SDK under /opt/apache/beam: the TaskManager launches Beam Java workers as
+# child processes (PROCESS environment) through Beam's `boot` binary.
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+    # Lago's melange overlay, synced from S3 by build-bases.yaml.
+    - ./repo-local
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    - ./repo-local/lago-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - tzdata
+    # Pulls bash, busybox, gettext, jemalloc and openjdk-17-jre. JRE 17 to
+    # match the Beam Java 17 SDK the consumer copies in.
+    - flink-1.20
+
+# Same uid/gid as the upstream image, so checkpoints and savepoints written by
+# the old image stay readable, and the operator's defaults still apply.
+accounts:
+  groups:
+    - groupname: flink
+      gid: 9999
+  users:
+    - username: flink
+      uid: 9999
+      gid: 9999
+      homedir: /opt/flink
+  run-as: 9999
+
+paths:
+  # Upstream chowns $FLINK_HOME to flink. docker-entrypoint.sh rewrites
+  # conf/config.yaml and links plugins/, and Flink writes log/.
+  - path: /opt/flink
+    type: permissions
+    permissions: 0o755
+    uid: 9999
+    gid: 9999
+    recursive: true
+  # Where the consumer Dockerfile drops Beam's boot binary and jars.
+  - path: /opt/apache/beam
+    type: directory
+    permissions: 0o755
+    uid: 9999
+    gid: 9999
+
+environment:
+  FLINK_HOME: /opt/flink
+  # No Wolfi JRE package installs /usr/bin/java; see rev-rec-base.yaml. Beam's
+  # boot binary execs `java` from PATH.
+  JAVA_HOME: /usr/lib/jvm/java-17-openjdk
+  PATH: /opt/flink/bin:/usr/lib/jvm/java-17-openjdk/bin:/usr/local/bin:/usr/bin:/bin
+
+archs:
+  - x86_64
+  - aarch64
+
+work-dir: /opt/flink
+
+entrypoint:
+  command: /docker-entrypoint.sh
+cmd: help
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.licenses: AGPL-3.0
+  org.opencontainers.image.description: Hardened Wolfi-based Flink 1.20 + JRE17 runtime image for the rev-rec FlinkDeployment

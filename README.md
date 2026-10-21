@@ -34,6 +34,8 @@ an SBOM, and every image is signed with cosign (keyless, via GitHub OIDC).
 | `ghcr.io/getlago/ratelimit-service-build` | go-1.26 (CGO off) | build stage of `ratelimit-service` |
 | `ghcr.io/getlago/rev-rec-base` | python-3.13, openjdk-17-jre, nonroot | both roles of the `rev-rec` Beam pipeline |
 | `ghcr.io/getlago/rev-rec-build` | python-3.13 + headers, uv, build-base | build stage of `rev-rec` |
+| `ghcr.io/getlago/rev-rec-flink-base` | flink-1.20 (overlay), openjdk-17-jre, jemalloc, flink uid 9999 | JobManager/TaskManager image of `rev-rec` |
+| `ghcr.io/getlago/rev-rec-flink-build` | go, git | Beam `boot` build stage of the `rev-rec` flink image |
 | `ghcr.io/getlago/self-billing-base` | python-3.13, nonroot, no shell | runtime stage of `lago-self-billing` |
 | `ghcr.io/getlago/self-billing-build` | python-3.13, uv, busybox | build stage of `lago-self-billing` |
 | `ghcr.io/getlago/superset-base` | python-3.12, libstdc++, nonroot, no shell | runtime stage of `data/superset` (lago-data `dashboards/`) |
@@ -104,8 +106,9 @@ permissions and makes provenance visible on the package page.
 
 Wolfi carries almost everything our images need. `packages/` holds a melange
 recipe for each exception — today only `chromium`, where Wolfi is months behind
-the CVE fixes gotenberg needs, and `ruby-4.0`, which Wolfi has since caught up
-on. Each recipe builds an apk for both arches, signed with the Lago melange key
+the CVE fixes gotenberg needs, `ruby-4.0`, which Wolfi has since caught up
+on, and `flink-1.20`, which Wolfi does not ship (2.x only) and Beam's
+FlinkRunner needs. Each recipe builds an apk for both arches, signed with the Lago melange key
 and published to the private S3 bucket `lago-wolfi-packages`.
 
 A manifest opts into the overlay by naming it as a repository:
