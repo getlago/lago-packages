@@ -1,0 +1,64 @@
+# Runtime for the dbt pipeline (lago-data `data_pipeline/`, ECR
+# lago-data-pipeline). Replaces `python:3.11-slim-trixie` + apt-get.
+#
+# The CronJobs run `scripts/entrypoint.sh`, which copies tables with
+# `pg_dump | sed | psql`, then runs `dbt deps` and `dbt build`.
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - tzdata
+    # Must match dbt-pipeline-build.yaml: the copied venv records this path.
+    # pyproject.toml pins requires-python to 3.11.
+    - python-3.11
+    # The scripts use `export -f`, `local` and `set -o pipefail`.
+    - bash
+    # mktemp, seq, sort, wc, date, xargs -P, sed.
+    - busybox
+    - coreutils
+    - findutils
+    - sed
+    # pg_dump and psql. 17 matches the old image's postgresql-client-17: its
+    # pg_dump writes the `SET transaction_timeout` line the scripts strip.
+    - postgresql-17-client
+    # `dbt deps` runs at job start and can fetch git packages.
+    - git
+
+accounts:
+  groups:
+    - groupname: nonroot
+      gid: 65532
+  users:
+    - username: nonroot
+      uid: 65532
+      gid: 65532
+  run-as: 65532
+
+paths:
+  # dbt writes target/, logs/ and dbt_packages/ next to dbt_project.yml at run
+  # time, so the project directory must belong to the uid the job runs as.
+  - path: /data_pipeline
+    type: directory
+    permissions: 0o755
+    uid: 65532
+    gid: 65532
+
+environment:
+  PATH: /data_pipeline/.venv/bin:/usr/local/bin:/usr/bin:/bin
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+archs:
+  - x86_64
+  - aarch64
+
+work-dir: /data_pipeline
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.licenses: AGPL-3.0
+  org.opencontainers.image.description: Hardened Wolfi-based python-3.11 + postgresql-17 client runtime image for the lago-data dbt pipeline
