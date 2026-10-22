@@ -13,12 +13,17 @@ contents:
     - ca-certificates-bundle
     - tzdata
     # Must match dbt-pipeline-build.yaml: the copied venv records this path.
-    # pyproject.toml pins requires-python to 3.11.
+    # Moves together with requires-python in lago-data data_pipeline/.
     - python-3.11
-    # The scripts use `export -f`, `local` and `set -o pipefail`.
+    # numpy, pandas and protobuf link them. Listed, not left to a transitive
+    # dependency of python-3.11.
+    - libstdc++
+    - libgcc
+    # The scripts use `export -f`, `local` and `set -o pipefail`. bash-binsh
+    # gives /bin/sh without busybox and its applets.
     - bash
+    - bash-binsh
     # mktemp, seq, sort, wc, date, xargs -P, sed.
-    - busybox
     - coreutils
     - findutils
     - sed
@@ -50,6 +55,7 @@ paths:
 environment:
   PATH: /data_pipeline/.venv/bin:/usr/local/bin:/usr/bin:/bin
   PYTHONUNBUFFERED: "1"
+  LANG: C.UTF-8
   PYTHONDONTWRITEBYTECODE: "1"
 
 archs:

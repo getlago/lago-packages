@@ -8,11 +8,12 @@ contents:
     - ca-certificates-bundle
     - bash
     - busybox
-    - build-base
     - git
     # Must match dbt-pipeline-base.yaml: the copied venv records this path.
+    # No build-base or headers: every locked package has a wheel, and the one
+    # sdist (dbt-core-experimental-parser) compiles nothing. Add them when an
+    # sdist needs a compiler.
     - python-3.11
-    - python-3.11-dev
     - uv
 
 environment:
