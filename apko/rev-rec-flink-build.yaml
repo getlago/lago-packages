@@ -1,0 +1,45 @@
+# Build stage of lago-data rev_rec/Dockerfile.flink: rebuilds Beam's Java SDK
+# `boot` binary from source. The prebuilt one in apache/beam_java17_sdk links a
+# grpc with known CVEs (3 Wiz findings, 2 high); a rebuild with a bumped grpc
+# and the current Go toolchain clears them.
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - bash
+    - busybox
+    - git
+    - go
+
+accounts:
+  groups:
+    - groupname: nonroot
+      gid: 65532
+  users:
+    - username: nonroot
+      uid: 65532
+      gid: 65532
+  run-as: 65532
+
+environment:
+  # boot is copied into a libc-agnostic layout and must not need cgo.
+  CGO_ENABLED: "0"
+  # Build with the Go that Wolfi ships, never a toolchain go.mod downloads.
+  GOTOOLCHAIN: local
+  GOPATH: /home/nonroot/go
+  GOCACHE: /home/nonroot/.cache/go-build
+
+archs:
+  - x86_64
+  - aarch64
+
+work-dir: /home/nonroot
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.licenses: AGPL-3.0
+  org.opencontainers.image.description: Hardened Wolfi-based Go build image for the rev-rec Flink image's Beam boot binary
