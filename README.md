@@ -15,7 +15,7 @@ an SBOM, and every image is signed with cosign (keyless, via GitHub OIDC).
 | `ghcr.io/getlago/lago-api-base` | ruby-4.0, jemalloc, libpq, pdfcpu, git, postgresql-client, curl | runtime stage of `lago-api` |
 | `ghcr.io/getlago/lago-api-build` | ruby-4.0 + headers, build-base, rust, nodejs, clang-19 | build stage of `lago-api` |
 | `ghcr.io/getlago/lago-front-base` | nginx, unprivileged (binds an unprivileged port) | runtime stage of `lago-front` |
-| `ghcr.io/getlago/lago-front-build` | nodejs, pnpm | build stage of `lago-front` |
+| `ghcr.io/getlago/lago-front-build` | nodejs-24, pnpm | build stage of `lago-front` |
 | `ghcr.io/getlago/data-agent-base` | python-3.13, nonroot | runtime stage of `lago-data-agent` |
 | `ghcr.io/getlago/data-agent-build` | python-3.13 + headers, uv, git, build-base | build + model-vendoring stages of `lago-data-agent` |
 | `ghcr.io/getlago/dbt-pipeline-base` | python-3.11, postgresql-17-client, bash, git, nonroot, no busybox | runtime stage of `lago-data-pipeline` (lago-data `data_pipeline/`) |
