@@ -1,0 +1,20 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Keep the lago-packages bases pinned by digest and up to date. Extend it from any repository that builds on ghcr.io/getlago/*-base or *-build images. Dockerfiles reference them as `ARG RUNTIME_IMAGE=ghcr.io/getlago/<base>:latest@sha256:<digest>`: Renovate opens one PR per repository when `latest` moves.",
+  "packageRules": [
+    {
+      "description": "lago-packages bases: pin the digest, track `latest`, one grouped PR, no release-age wait (base updates carry CVE fixes).",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["ghcr.io/getlago/**"],
+      "pinDigests": true,
+      "groupName": "lago-packages bases",
+      "groupSlug": "lago-packages-bases",
+      "schedule": ["at any time"],
+      "minimumReleaseAge": null,
+      "commitMessageTopic": "lago-packages bases",
+      "semanticCommitType": "chore",
+      "semanticCommitScope": "bases",
+      "addLabels": ["lago-packages bases"]
+    }
+  ]
+}
