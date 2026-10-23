@@ -1,20 +1,30 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Keep the lago-packages bases pinned by digest and up to date. Extend it from any repository that builds on ghcr.io/getlago/*-base or *-build images. Dockerfiles reference them as `ARG RUNTIME_IMAGE=ghcr.io/getlago/<base>:latest@sha256:<digest>`: Renovate opens one PR per repository when `latest` moves.",
+  "description": "Keep the lago-packages bases pinned and up to date. Extend it from any repository that builds on ghcr.io/getlago/*-base or *-build images. Dockerfiles reference them as `ARG RUNTIME_IMAGE=ghcr.io/getlago/<base>:<YYYYMMDD>-r<run>@sha256:<digest>`: Renovate moves tag and digest together, in one PR per repository, when lago-packages publishes a new base.",
   "packageRules": [
     {
-      "description": "lago-packages bases: pin the digest, track `latest`, one grouped PR, no release-age wait (base updates carry CVE fixes).",
-      "matchDatasources": ["docker"],
-      "matchPackageNames": ["ghcr.io/getlago/**"],
+      "description": "lago-packages bases: versioned by publish (<YYYYMMDD>-r<run>: date = major, run = minor), pinned by digest, one grouped PR, any time, no release-age wait (base updates carry CVE fixes). The regex skips latest, commit-sha and per-arch (-aarch64) tags.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "ghcr.io/getlago/**"
+      ],
+      "versioning": "regex:^(?<major>\\d{8})-r(?<minor>\\d+)$",
+      "separateMajorMinor": false,
       "pinDigests": true,
       "groupName": "lago-packages bases",
       "groupSlug": "lago-packages-bases",
-      "schedule": ["at any time"],
+      "schedule": [
+        "at any time"
+      ],
       "minimumReleaseAge": null,
       "commitMessageTopic": "lago-packages bases",
       "semanticCommitType": "chore",
       "semanticCommitScope": "bases",
-      "addLabels": ["lago-packages bases"]
+      "addLabels": [
+        "lago-packages bases"
+      ]
     }
   ]
 }
