@@ -1,0 +1,64 @@
+# Runtime for the redpanda-to-paimon and paimon-to-postgres FlinkDeployments
+# (getlago/lago-infrastructure images/flink-paimon). Replaces
+# `flink:1.20.5-java17`, which is Ubuntu-based and needs apt pins for each new
+# CVE.
+#
+# Fixed for this one image: Flink 1.20 on JRE 17 (packages/flink-paimon-1.20.yaml),
+# with the S3 filesystem plugin enabled. The Paimon, Kafka, JDBC and CDC jars,
+# the patched Paimon and JDBC connector classes and the leg-3 jar are added by
+# the consumer Dockerfile. So is the securerandom.source edit in the JRE's
+# java.security, which this image cannot own.
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+    - ./repo-local
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    - ./repo-local/lago-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - tzdata
+    - flink-paimon-1.20
+
+accounts:
+  groups:
+    - groupname: flink
+      gid: 9999
+  users:
+    - username: flink
+      uid: 9999
+      gid: 9999
+      homedir: /opt/flink
+  run-as: 9999
+
+paths:
+  # Upstream chowns $FLINK_HOME to flink. docker-entrypoint.sh rewrites
+  # conf/config.yaml and links plugins/, and Flink writes log/.
+  - path: /opt/flink
+    type: permissions
+    permissions: 0o755
+    uid: 9999
+    gid: 9999
+    recursive: true
+
+environment:
+  FLINK_HOME: /opt/flink
+  # No Wolfi JRE package installs /usr/bin/java: put the JRE on PATH.
+  JAVA_HOME: /usr/lib/jvm/java-17-openjdk
+  PATH: /opt/flink/bin:/usr/lib/jvm/java-17-openjdk/bin:/usr/local/bin:/usr/bin:/bin
+
+archs:
+  - x86_64
+  - aarch64
+
+work-dir: /opt/flink
+
+entrypoint:
+  command: /docker-entrypoint.sh
+cmd: help
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.licenses: AGPL-3.0
+  org.opencontainers.image.description: Hardened Wolfi-based Flink 1.20 + JRE17 runtime image for the flink-paimon FlinkDeployments

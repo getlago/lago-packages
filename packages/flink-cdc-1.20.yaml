@@ -1,0 +1,127 @@
+package:
+  name: flink-cdc-1.20
+  version: 1.20.5
+  epoch: 0
+  description: >-
+    Apache Flink 1.20 on JRE 11, the upstream binary release with log4j
+    bumped and the S3 filesystem plugin enabled — Lago build. Fixed for one
+    consumer: flink-cdc-base (getlago/lago-infrastructure images/flink-cdc,
+    the postgres-to-redpanda CDC job, which runs on Java 11).
+  copyright:
+    - license: Apache-2.0
+  dependencies:
+    runtime:
+      # bin/*.sh and docker-entrypoint.sh are bash scripts.
+      - bash
+      - busybox
+      # envsubst: docker-entrypoint.sh expands $VARS in FLINK_PROPERTIES.
+      - gettext
+      # docker-entrypoint.sh preloads it unless DISABLE_JEMALLOC=true, as the
+      # upstream image does.
+      - jemalloc
+      - openjdk-11-jre
+
+environment:
+  contents:
+    keyring:
+      - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    repositories:
+      - https://packages.wolfi.dev/os
+    packages:
+      - bash
+      - busybox
+      - ca-certificates-bundle
+      # config-parser-utils.sh runs a java helper to rewrite conf/config.yaml.
+      - openjdk-11-jre
+  environment:
+    JAVA_HOME: /usr/lib/jvm/java-11-openjdk
+
+vars:
+  # Wiz flags log4j 2.24.3, which 1.20.5 still bundles (fixed in 2.25.4 for
+  # core, 2.25.5 for api). Same 2.x API, so a jar swap is enough.
+  log4j: 2.25.5
+  # apache/flink-docker master, for docker-entrypoint.sh of 1.20 java11.
+  flink-docker: bfe5663ec356ea91deeac4e05da78e3313268fc5
+
+pipeline:
+  # closer.lua redirects to a mirror, or to archive.apache.org once a release
+  # leaves the mirrors. dlcdn drops old releases, and every push rebuilds every
+  # recipe, so a dlcdn URI would break the day 1.20.6 ships.
+  - uses: fetch
+    with:
+      uri: https://www.apache.org/dyn/closer.lua/flink/flink-${{package.version}}/flink-${{package.version}}-bin-scala_2.12.tgz?action=download
+      expected-sha512: c846ecbcc4a1705724832acdbad27538c31f17aa494e8b69ff5f92d724574be83d1dff0b363aa0570e5a448f529224705d967d0d14df3267143eec5064a52a1f
+
+  - runs: rm lib/log4j-*.jar
+
+  - uses: fetch
+    with:
+      uri: https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-api/${{vars.log4j}}/log4j-api-${{vars.log4j}}.jar
+      expected-sha256: 64777f73ea0b3104c04eb82befbdccc30a425a19e83ad06cb2f93aa303511863
+      extract: false
+  - uses: fetch
+    with:
+      uri: https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-core/${{vars.log4j}}/log4j-core-${{vars.log4j}}.jar
+      expected-sha256: 050c4f85deb48b055e9c041ac39043fbb79ce477841a11a1eb2969c86c6a0072
+      extract: false
+  - uses: fetch
+    with:
+      uri: https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-1.2-api/${{vars.log4j}}/log4j-1.2-api-${{vars.log4j}}.jar
+      expected-sha256: 4dd812dc5a6343f542a9e0046b1ec78ecf10bdd5a8c15745101cdd8b9aa24974
+      extract: false
+  - uses: fetch
+    with:
+      uri: https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-slf4j-impl/${{vars.log4j}}/log4j-slf4j-impl-${{vars.log4j}}.jar
+      expected-sha256: 3d25b926bc6025c47ec010459749c12aa66b9d5537ba1922d67d89a098a66607
+      extract: false
+
+  - uses: fetch
+    with:
+      uri: https://raw.githubusercontent.com/apache/flink-docker/${{vars.flink-docker}}/1.20/scala_2.12-java11-ubuntu/docker-entrypoint.sh
+      expected-sha256: 3fa9e14f328682bb062a9a5a58c583950dc9cd28c45be10225516a46d4de0bf9
+      extract: false
+
+  - runs: |
+      mv log4j-*.jar lib/
+
+      # The listen-address rewrite of the upstream Dockerfile: bind on every
+      # interface, not localhost, so pods reach each other.
+      bash bin/config-parser-utils.sh conf bin lib \
+        -repKV rest.address,localhost,0.0.0.0 \
+        -repKV rest.bind-address,localhost,0.0.0.0 \
+        -repKV jobmanager.bind-host,localhost,0.0.0.0 \
+        -repKV taskmanager.bind-host,localhost,0.0.0.0 \
+        -rmKV taskmanager.host=localhost
+
+      # Upstream looks for jemalloc at the Debian multiarch path. Wolfi has it
+      # at /usr/lib, so point both lookups there.
+      sed -i 's|/usr/lib/[^"]*-linux-gnu/libjemalloc.so|/usr/lib/libjemalloc.so.2|g' docker-entrypoint.sh
+      grep -q '/usr/lib/libjemalloc.so.2' docker-entrypoint.sh
+
+      # flink-cdc reads and writes S3 (checkpoints, savepoints), as in the
+      # upstream image's opt-in: the plugin moves from opt/ to plugins/.
+      mkdir -p plugins/s3-fs-hadoop
+      mv opt/flink-s3-fs-hadoop-*.jar plugins/s3-fs-hadoop/
+
+      # examples/ is demo jars, nothing runs them.
+      mkdir -p ${{targets.destdir}}/opt/flink
+      cp -a bin conf lib opt plugins licenses LICENSE NOTICE README.txt ${{targets.destdir}}/opt/flink/
+      mkdir -p ${{targets.destdir}}/opt/flink/log
+
+      # The Flink Kubernetes operator starts every pod with /docker-entrypoint.sh.
+      install -Dm755 docker-entrypoint.sh ${{targets.destdir}}/usr/bin/docker-entrypoint.sh
+      ln -s /usr/bin/docker-entrypoint.sh ${{targets.destdir}}/docker-entrypoint.sh
+
+test:
+  environment:
+    contents:
+      packages:
+        - busybox
+    environment:
+      JAVA_HOME: /usr/lib/jvm/java-11-openjdk
+  pipeline:
+    - runs: |
+        /opt/flink/bin/flink --version | grep -F 'Version: ${{package.version}}'
+        test -z "$(ls /opt/flink/lib/log4j-*-2.24.*.jar 2>/dev/null)"
+        test -x /docker-entrypoint.sh
+        ls /opt/flink/plugins/s3-fs-hadoop/flink-s3-fs-hadoop-*.jar
