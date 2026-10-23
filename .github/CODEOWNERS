@@ -1,0 +1,3 @@
+# Workflows and scripts here run in other repositories, with their tokens,
+# registry roles and build secrets (see README.md, "Base refresh").
+/.github/ @getlago/infra
