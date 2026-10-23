@@ -1,0 +1,205 @@
+name: Base refresh
+
+# Rebuilds the deployed commit of each pinned image on the newest
+# lago-packages base, then opens one PR per image with the new tag, in the
+# calling repository: the one that holds the tags (lago-infrastructure,
+# lago-deploy). Pins format: see README.md.
+#
+# plan.sh lists the stale pins. A pin with a `builder` is rebuilt by that
+# repository (its base-rebuild.yaml calls rebuild.yaml, with its own secrets
+# and registry access): dispatch.sh starts it and waits. A pin without one is
+# built here, for an image that needs no secret. bump.sh opens the PR.
+on:
+  workflow_call:
+    inputs:
+      pins:
+        description: Pins file, relative to the caller's repository root.
+        type: string
+        required: true
+      ecr-role:
+        description: OIDC role that can pull every ECR repository in the pins file.
+        type: string
+        required: true
+      ecr-push-role:
+        description: OIDC role that can push the images built here (pins with no `builder`).
+        type: string
+        default: ''
+      ecr:
+        description: Repository prefix for a pin with no `repository` (<prefix>/<name>).
+        type: string
+        default: ''
+    secrets:
+      pr-token:
+        description: >-
+          Opens the PRs here (contents + pull requests write), reads the
+          `source` repositories (contents read) and starts the `builder`
+          runs (actions write). A PR opened with GITHUB_TOKEN does not start CI.
+          Never handed to a build whose pin has no `source`.
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  # The commit this workflow runs from, from the OIDC token. The scripts are
+  # checked out at it, so a caller that pins this workflow by SHA also pins
+  # the scripts.
+  scripts:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - id: sha
+        run: |
+          jwt=$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=lago-packages-base-refresh" | jq -r .value)
+          claims=$(cut -d. -f2 <<<"$jwt" | tr '_-' '/+')
+          claims=$(printf '%s%s' "$claims" "$(printf '%*s' $(( (4 - ${#claims} % 4) % 4 )) '' | tr ' ' =)" | base64 -d)
+          ref=$(jq -r .job_workflow_ref <<<"$claims")
+          sha=$(jq -r .job_workflow_sha <<<"$claims")
+          [[ $ref == getlago/lago-packages/.github/workflows/base-refresh.yaml@* && $sha =~ ^[0-9a-f]{40}$ ]] ||
+            { echo "::error::unexpected job_workflow_ref $ref"; exit 1; }
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+          echo "scripts at getlago/lago-packages@$sha" >&2
+
+  plan:
+    needs: scripts
+    runs-on: ubuntu-latest
+    outputs:
+      pins: ${{ steps.plan.outputs.pins }}
+      builds: ${{ steps.plan.outputs.builds }}
+      dispatches: ${{ steps.plan.outputs.dispatches }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # plan.sh reads build.json at the deployed commit.
+          fetch-depth: 0
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ inputs.ecr-role }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - uses: imjasonh/setup-crane@v0.7
+      - uses: actions/checkout@v7
+        with:
+          repository: getlago/lago-packages
+          ref: ${{ needs.scripts.outputs.sha }}
+          path: .base-refresh
+          sparse-checkout: .github/actions/base-refresh
+      - run: echo "$GITHUB_WORKSPACE/.base-refresh/.github/actions/base-refresh" >>"$GITHUB_PATH"
+      - id: plan
+        env:
+          PINS: ${{ inputs.pins }}
+          ECR: ${{ inputs.ecr }}
+          GH_TOKEN: ${{ secrets.pr-token }}
+        run: |
+          plan.sh >pins.jsonl
+          # One refresh job per image, so its pins land in one PR. One build
+          # per tag: pins of one image on one commit share it.
+          echo "pins=$(jq -sc 'group_by(.name)' pins.jsonl)" >>"$GITHUB_OUTPUT"
+          todo='map(select(.built | not)) | unique_by([.repository, .tag])'
+          echo "builds=$(jq -sc "$todo | map(select(.builder | not))" pins.jsonl)" >>"$GITHUB_OUTPUT"
+          echo "dispatches=$(jq -sc "$todo | map(select(.builder))" pins.jsonl)" >>"$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.builds != '[]' && inputs.ecr-push-role != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        pin: ${{ fromJson(needs.plan.outputs.builds) }}
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    uses: getlago/lago/.github/workflows/docker-build-multi-arch.yaml@117b8219da7ad92631d47018ace3896f26201161 # main 2026-10-21
+    with:
+      image-name: ${{ matrix.pin.repository }}
+      # Empty for an image built in the calling repository.
+      repository: ${{ matrix.pin.source }}
+      ref: ${{ matrix.pin.commit }}
+      context: ${{ matrix.pin.context }}
+      dockerfile: ${{ matrix.pin.dockerfile }}
+      registry: ecr
+      role-to-assume: ${{ inputs.ecr-push-role }}
+      # Only the new tag: the release tag must keep the original build.
+      default-tags: false
+      tags: type=raw,value=${{ matrix.pin.tag }}
+      build-args: RUNTIME_IMAGE=${{ matrix.pin.base }}
+    secrets:
+      # Only to check out a `source` repository.
+      repository-token: ${{ matrix.pin.source != '' && secrets.pr-token || '' }}
+
+  dispatch:
+    needs: [scripts, plan]
+    if: needs.plan.outputs.dispatches != '[]'
+    runs-on: ubuntu-latest
+    name: dispatch (${{ matrix.pin.name }} → ${{ matrix.pin.builder }})
+    strategy:
+      fail-fast: false
+      matrix:
+        pin: ${{ fromJson(needs.plan.outputs.dispatches) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: getlago/lago-packages
+          ref: ${{ needs.scripts.outputs.sha }}
+          path: .base-refresh
+          sparse-checkout: .github/actions/base-refresh
+      - run: echo "$GITHUB_WORKSPACE/.base-refresh/.github/actions/base-refresh" >>"$GITHUB_PATH"
+      - env:
+          PIN: ${{ toJson(matrix.pin) }}
+          GH_TOKEN: ${{ secrets.pr-token }}
+          NONCE: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: dispatch.sh
+
+  # One job per image, also when a build failed: a failed image has no tag,
+  # so only its own job fails.
+  refresh:
+    needs: [scripts, plan, build, dispatch]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.pins != '[]' }}
+    runs-on: ubuntu-latest
+    name: refresh (${{ matrix.pins[0].name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        pins: ${{ fromJson(needs.plan.outputs.pins) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.pr-token }}
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ inputs.ecr-role }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - uses: aquasecurity/setup-trivy@v0.3.1
+      # Every run, also when an earlier run built the tag. OS packages only:
+      # that is what a base refresh changes. A missing tag fails here.
+      - name: Trivy (OS packages)
+        env:
+          PINS: ${{ toJson(matrix.pins) }}
+        run: |
+          jq -r '.[] | "\(.repository):\(.tag)"' <<<"$PINS" | sort -u | while read -r image; do
+            trivy image --severity HIGH,CRITICAL --ignore-unfixed --pkg-types os --exit-code 1 "$image"
+          done
+      - uses: actions/checkout@v7
+        with:
+          repository: getlago/lago-packages
+          ref: ${{ needs.scripts.outputs.sha }}
+          path: .base-refresh
+          sparse-checkout: .github/actions/base-refresh
+      - run: echo "$GITHUB_WORKSPACE/.base-refresh/.github/actions/base-refresh" >>"$GITHUB_PATH"
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          jq -c '.[]' <<<"$PINS" | bump.sh
+        env:
+          PINS: ${{ toJson(matrix.pins) }}
+          GH_TOKEN: ${{ secrets.pr-token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

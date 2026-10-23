@@ -1,0 +1,108 @@
+name: Base rebuild
+
+# Rebuilds one deployed commit on a new lago-packages base and pushes only the
+# given tag. Called by the base-rebuild.yaml of a `builder` repository, which
+# base-refresh.yaml (in the repository that holds the tag) dispatches with
+# commit, base and tag. The builder passes its own secrets and registry
+# access, so they never leave it. Example: README.md, "Base refresh".
+on:
+  workflow_call:
+    inputs:
+      commit:
+        description: The deployed commit to rebuild.
+        type: string
+        required: true
+      base:
+        description: The new base, ghcr.io/getlago/<base>@sha256:..., passed as RUNTIME_IMAGE.
+        type: string
+        required: true
+      tag:
+        description: >-
+          The only tag to push, <release>-base.<digest12>. The release tag
+          keeps the original build.
+        type: string
+        required: true
+      image-name:
+        description: Full image repository.
+        type: string
+        required: true
+      repository:
+        description: Repository with the Dockerfile, when it is not the caller.
+        type: string
+        default: ''
+      context:
+        type: string
+        default: .
+      dockerfile:
+        type: string
+        default: Dockerfile
+      build-args:
+        description: Extra build args, one KEY=value per line.
+        type: string
+        default: ''
+      registry:
+        type: string
+        default: ecr
+      role-to-assume:
+        description: OIDC role for the registry. Or pass registry-user/registry-token.
+        type: string
+        default: ''
+      aws-region:
+        type: string
+        default: us-east-1
+    secrets:
+      registry-user:
+        required: false
+      registry-token:
+        required: false
+      repository-token:
+        description: Checks out a private `repository`.
+        required: false
+      build-secrets:
+        description: One id=value per line.
+        required: false
+
+jobs:
+  # Anyone who can dispatch the caller sets these, and the shared build pastes
+  # build args into a shell step that holds the registry keys and build
+  # secrets. Accept only the exact shapes base-refresh.yaml sends.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          COMMIT: ${{ inputs.commit }}
+          BASE: ${{ inputs.base }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          [[ $COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "::error::commit must be a full SHA"; exit 1; }
+          [[ $BASE =~ ^ghcr\.io/getlago/[a-z0-9-]+@sha256:([0-9a-f]{64})$ ]] || { echo "::error::base must be ghcr.io/getlago/<base>@sha256:<digest>"; exit 1; }
+          digest=${BASH_REMATCH[1]}
+          [[ $TAG =~ ^[A-Za-z0-9._-]{1,100}-base\.([0-9a-f]{12})$ && ${BASH_REMATCH[1]} == "${digest:0:12}" ]] ||
+            { echo "::error::tag must be <release>-base.<first 12 of the base digest>"; exit 1; }
+
+  build:
+    needs: check
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    uses: getlago/lago/.github/workflows/docker-build-multi-arch.yaml@117b8219da7ad92631d47018ace3896f26201161 # main 2026-10-21
+    with:
+      image-name: ${{ inputs.image-name }}
+      repository: ${{ inputs.repository }}
+      ref: ${{ inputs.commit }}
+      context: ${{ inputs.context }}
+      dockerfile: ${{ inputs.dockerfile }}
+      registry: ${{ inputs.registry }}
+      role-to-assume: ${{ inputs.role-to-assume }}
+      aws-region: ${{ inputs.aws-region }}
+      default-tags: false
+      tags: type=raw,value=${{ inputs.tag }}
+      build-args: |
+        RUNTIME_IMAGE=${{ inputs.base }}
+        ${{ inputs.build-args }}
+    secrets:
+      registry-user: ${{ secrets.registry-user }}
+      registry-token: ${{ secrets.registry-token }}
+      repository-token: ${{ secrets.repository-token }}
+      build-secrets: ${{ secrets.build-secrets }}

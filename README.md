@@ -72,6 +72,95 @@ The dispatch needs the `BASE_UPDATE_DISPATCH_TOKEN` secret (a token with
 `contents: write` on both repos). The consumers also run daily, so a missed
 dispatch only delays a refresh.
 
+## Base refresh (for consumers)
+
+A new base fixes nothing until the images built on it are rebuilt and
+deployed. Three kinds of repository take part:
+
+| Repository | Does | Workflow |
+| --- | --- | --- |
+| lago-packages | publishes a base, sends `base-updated` | `build-bases.yaml` |
+| holds the tags (lago-infrastructure, lago-deploy) | plans, waits for the rebuild, scans it, opens the bump PR | calls `base-refresh.yaml` |
+| `builder` (lago-sidekiqs…) | rebuilds the **deployed commit** with its own secrets | `base-rebuild.yaml`, calls `rebuild.yaml` |
+
+The new tag is `<release>-base.<digest12>`. A pin with no `builder` is built
+by the repository that holds the tag, for an image that needs no secret.
+
+```yaml
+# Holds the tags: .github/workflows/refresh-bases.yaml
+on:
+  repository_dispatch: {types: [base-updated]}   # sent by build-bases.yaml
+  schedule: [{cron: '30 9 * * *'}]
+  workflow_dispatch:
+concurrency: {group: refresh-bases, cancel-in-progress: false}   # one refresh at a time
+jobs:
+  refresh:
+    permissions: {contents: read, id-token: write, packages: write}
+    uses: getlago/lago-packages/.github/workflows/base-refresh.yaml@<sha>   # pin by SHA
+    with:
+      pins: .github/base-refresh/pins.yaml
+      ecr-role: arn:aws:iam::<account>:role/<pulls the pinned repos>
+      ecr-push-role: arn:aws:iam::<account>:role/<pushes the in-place images>   # only if some pin has no builder
+    secrets:
+      pr-token: ${{ secrets.BASE_REFRESH_PR_TOKEN }}
+```
+
+```yaml
+# Builder: .github/workflows/base-rebuild.yaml (must be on the default branch)
+name: Base rebuild
+run-name: base rebuild ${{ inputs.tag }} ${{ inputs.nonce }}   # dispatch.sh finds the run by the nonce
+on:
+  workflow_dispatch:
+    inputs:
+      commit: {type: string, required: true}
+      base: {type: string, required: true}
+      tag: {type: string, required: true}
+      name: {type: string, required: false}
+      nonce: {type: string, required: false}
+jobs:
+  rebuild:
+    permissions: {contents: read, id-token: write, packages: write}   # the shared build asks for these
+    uses: getlago/lago-packages/.github/workflows/rebuild.yaml@<sha>   # pin by SHA
+    with:
+      commit: ${{ inputs.commit }}
+      base: ${{ inputs.base }}
+      tag: ${{ inputs.tag }}
+      image-name: <registry>/<repository>
+      role-to-assume: <OIDC push role>   # or the registry-user/registry-token secrets
+    secrets:
+      build-secrets: |
+        <id>=${{ secrets.<SECRET> }}
+```
+
+Pins file: one entry per place a tag is pinned. Entries that share `name` go
+in one PR.
+
+| Field | |
+| --- | --- |
+| `name` | image name, and the PR branch `base-refresh/<name>` |
+| `base` | the `ghcr.io/getlago/<base>` the image runs on |
+| `file`, `path` | the YAML file and the yq path of the tag, or of a full `repository:tag` |
+| `repository` | full image repository (or `<ecr input>/<name>`) |
+| `source`, `dockerfile` | the repository and Dockerfile of the image (commit lookup, `ARG RUNTIME_IMAGE` check) |
+| `builder` | the repository whose `base-rebuild.yaml` rebuilds it (`builder-ref`: its branch, for a test) |
+| `context` | build context, for an image with no `builder` |
+
+The deployed tag must be `<commit>`, `<word>-<commit>` or either with
+`.build-<n>`. A pin is skipped while its Dockerfile at the deployed commit has
+no `ARG RUNTIME_IMAGE`, so a pin can be added before the image moves to a
+lago-packages base.
+
+`pr-token`, fine-grained: contents + pull requests write on the repository
+that holds the tags, contents read on each `source`, actions write on each
+`builder`. Actions write can start any workflow of the builder, so a builder
+should have no other `workflow_dispatch` workflow that deploys.
+
+`rebuild.yaml` accepts only a full commit SHA, a `ghcr.io/getlago/<base>@sha256:`
+base and a `<release>-base.<digest12>` tag that matches that base: a dispatch
+cannot inject build args or push a release tag. `base-refresh.yaml` checks out
+its scripts at its own commit (the `job_workflow_sha` OIDC claim), so pinning
+the workflow by SHA also pins the scripts.
+
 ## Verifying
 
 ```sh
