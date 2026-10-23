@@ -14,10 +14,10 @@
 #     without the matching hash fails fast at build time rather than
 #     silently letting an unverified JAR into the image.
 #   RUNTIME_IMAGE — the apko base to overlay onto, pinned as
-#     `:latest@sha256:<digest>`. Renovate (renovate/lago-bases) bumps it
-#     when `latest` moves.
+#     `:<YYYYMMDD>-r<run>@sha256:<digest>`. Renovate (renovate/lago-bases)
+#     bumps tag and digest when a newer base is published.
 
-ARG RUNTIME_IMAGE=ghcr.io/getlago/lago-metabase-base:latest@sha256:9d001b5bfa2b2055dd92b7d5ce70f75fd5148da7df58a5859e0f8f964f3e3db0
+ARG RUNTIME_IMAGE=ghcr.io/getlago/lago-metabase-base:20261023-r68@sha256:9d001b5bfa2b2055dd92b7d5ce70f75fd5148da7df58a5859e0f8f964f3e3db0
 ARG METABASE_VERSION
 ARG METABASE_SHA256
 
