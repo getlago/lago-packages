@@ -22,6 +22,10 @@ an SBOM, and every image is signed with cosign (keyless, via GitHub OIDC).
 | `ghcr.io/getlago/dbt-pipeline-build` | python-3.11, uv, git | build stage of `lago-data-pipeline` |
 | `ghcr.io/getlago/events-processor-base` | minimal runtime | runtime stage of `events-processor` |
 | `ghcr.io/getlago/events-processor-build` | go, rust, cargo | build stage of `events-processor` |
+| `ghcr.io/getlago/flink-cdc-base` | flink-cdc-1.20 (overlay: Flink 1.20, openjdk-11-jre, S3 plugin), flink uid 9999 | JobManager/TaskManager image of `flink-cdc` (lago-infrastructure, postgres-to-redpanda) |
+| `ghcr.io/getlago/flink-cdc-build` | openjdk-11, maven-3.9, git, patch | connector, seed and download stages of `flink-cdc` |
+| `ghcr.io/getlago/flink-paimon-base` | flink-paimon-1.20 (overlay: Flink 1.20, openjdk-17-jre, S3 plugin), flink uid 9999 | JobManager/TaskManager image of `flink-paimon` (lago-infrastructure, redpanda-to-paimon, paimon-to-postgres) |
+| `ghcr.io/getlago/flink-paimon-build` | openjdk-17, zip | patch, leg-3 and download stages of `flink-paimon` |
 | `ghcr.io/getlago/gotenberg-base` | chromium, libreoffice-25.8, openjdk-21-jre, qpdf, exiftool, python-3.11, fonts | runtime stage of `lago-gotenberg` |
 | `ghcr.io/getlago/gotenberg-build` | go-1.26, build-base, git | build stage of `lago-gotenberg` |
 | `ghcr.io/getlago/lago-metabase-base` | openjdk-21-jre, fontconfig, Noto/Liberation fonts | runtime for the metabase JAR wrapper |
@@ -198,8 +202,10 @@ permissions and makes provenance visible on the package page.
 Wolfi carries almost everything our images need. `packages/` holds a melange
 recipe for each exception — today only `chromium`, where Wolfi is months behind
 the CVE fixes gotenberg needs, `ruby-4.0`, which Wolfi has since caught up
-on, and `flink-1.20`, which Wolfi does not ship (2.x only) and Beam's
-FlinkRunner needs. Each recipe builds an apk for both arches, signed with the Lago melange key
+on, and the Flink 1.20 builds, which Wolfi does not ship (2.x only): one per
+consumer, each fixed to its JRE — `flink-1.20` (rev-rec, JRE 17; Beam's
+FlinkRunner needs 1.20), `flink-cdc-1.20` (JRE 11) and `flink-paimon-1.20`
+(JRE 17). Each recipe builds an apk for both arches, signed with the Lago melange key
 and published to the private S3 bucket `lago-wolfi-packages`.
 
 A manifest opts into the overlay by naming it as a repository:
