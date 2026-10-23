@@ -1,0 +1,14 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "For repositories that use Renovate only for the lago-packages bases: Dockerfile images under ghcr.io/getlago, nothing else.",
+  "extends": ["github>getlago/lago-packages//renovate/lago-bases"],
+  "enabledManagers": ["dockerfile"],
+  "dependencyDashboard": false,
+  "packageRules": [
+    {
+      "description": "Only the lago-packages bases.",
+      "matchPackageNames": ["!ghcr.io/getlago/**"],
+      "enabled": false
+    }
+  ]
+}
