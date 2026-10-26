@@ -45,8 +45,12 @@ git checkout -B "$BRANCH" origin/main
 git commit -qam "$TITLE"
 git push --force origin "$BRANCH"
 
-if [[ $(gh pr view "$BRANCH" --json state -q .state 2>/dev/null) == OPEN ]]; then
-  gh pr edit "$BRANCH" --body-file "$body"
+# REST, not `gh pr view/edit`: those also read the PR's requested
+# reviewers, and a fine-grained token cannot read team reviewers (CODEOWNERS).
+REPO=${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}
+pr=$(gh api "repos/$REPO/pulls?head=${REPO%%/*}:$BRANCH&state=open" -q '.[0].number // empty')
+if [[ -n $pr ]]; then
+  gh api -X PATCH "repos/$REPO/pulls/$pr" -F "body=@$body" -q .html_url
 else
   gh pr create --base main --head "$BRANCH" --title "$TITLE" --body-file "$body"
 fi
