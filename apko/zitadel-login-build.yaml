@@ -15,7 +15,7 @@ contents:
     - patch
     # `nodejs` is not a package in Wolfi — the major version is part of the
     # name. Must track the runtime major in zitadel-login-base.yaml.
-    - nodejs-22
+    - nodejs-24
     - npm
     # Wolfi ships pnpm directly, so the consumer Dockerfile no longer needs
     # `corepack enable && corepack prepare`. Corepack would also enforce
@@ -33,4 +33,4 @@ archs:
 
 annotations:
   org.opencontainers.image.source: https://github.com/getlago/lago-packages
-  org.opencontainers.image.description: Wolfi-based builder image for zitadel-login (nodejs-22 + pnpm + git/patch)
+  org.opencontainers.image.description: Wolfi-based builder image for zitadel-login (nodejs-24 + pnpm + git/patch)
