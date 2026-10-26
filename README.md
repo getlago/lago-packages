@@ -46,8 +46,8 @@ an SBOM, and every image is signed with cosign (keyless, via GitHub OIDC).
 | `ghcr.io/getlago/sidekiq-web-build` | ruby-3.4 + headers, build-base, openssl-dev, yaml-dev | build stage of `sidekiq-web` |
 | `ghcr.io/getlago/argo-workflows-server-base` | minimal runtime (ca-certificates, tzdata), argo uid 8737 | runtime stage of `argo-workflows-server` |
 | `ghcr.io/getlago/argo-workflows-server-build` | go-1.26, nodejs-20, yarn, git, patch, make, bash, build-base | build stages of `argo-workflows-server` |
-| `ghcr.io/getlago/zitadel-login-base` | nodejs-22, busybox, nonroot | runtime stage of the Lago-branded zitadel login app |
-| `ghcr.io/getlago/zitadel-login-build` | nodejs-22, pnpm, git, patch, build-base | build stage of the zitadel login app |
+| `ghcr.io/getlago/zitadel-login-base` | nodejs-24, busybox, nonroot | runtime stage of the Lago-branded zitadel login app |
+| `ghcr.io/getlago/zitadel-login-build` | nodejs-24, pnpm, git, patch, build-base | build stage of the zitadel login app |
 
 All are multi-arch (`x86_64`, `aarch64`).
 

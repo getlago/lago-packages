@@ -9,7 +9,7 @@ contents:
     - tzdata
     # Must match the major in zitadel-login-build.yaml: Next.js standalone
     # output bundles native bindings resolved against the build's node ABI.
-    - nodejs-22
+    - nodejs-24
     # Next.js standalone ships an entrypoint.sh. Unlike the prequel image we
     # cannot go shell-free here — dropping busybox makes the container exit
     # with "no such file or directory" on a shebang that cannot be resolved.
@@ -63,4 +63,4 @@ work-dir: /app
 annotations:
   org.opencontainers.image.source: https://github.com/getlago/lago-packages
   org.opencontainers.image.licenses: Apache-2.0
-  org.opencontainers.image.description: Hardened Wolfi-based nodejs-22 runtime image for the Lago-branded zitadel login app
+  org.opencontainers.image.description: Hardened Wolfi-based nodejs-24 runtime image for the Lago-branded zitadel login app
