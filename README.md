@@ -62,15 +62,15 @@ The daily rebuild is the point: Wolfi publishes CVE patches multiple times a day
 and `:latest` picks them up without anyone opening a PR.
 
 apko builds are reproducible, so a rebuild with the same apk set gives the same
-digest. A base is published only when its digest changes. The `notify` job
-then sends a `base-updated` `repository_dispatch` to `getlago/lago-deploy` and
-`getlago/lago-infrastructure`. There, `base-refresh plan`
-([lago-infrastructure `tools/base-refresh`](https://github.com/getlago/lago-infrastructure/tree/main/tools/base-refresh))
-rebuilds the deployed images on the new digests and bumps their GitOps tags.
+digest. A base is published only when its digest changes. The `notify` job of
+the batch then sends a `base-updated` `repository_dispatch` to the deploy
+repositories (the private repositories that hold the deployed tags). There, the
+base refresh rebuilds the deployed images on the new digests and bumps their
+GitOps tags: see [Base refresh](#base-refresh-for-consumers).
 
 The dispatch needs the `BASE_UPDATE_DISPATCH_TOKEN` secret (a token with
-`contents: write` on both repos). The consumers also run daily, so a missed
-dispatch only delays a refresh.
+`contents: write` on each deploy repository). The deploy repositories also run
+the refresh daily, so a missed dispatch only delays a refresh.
 
 ## Base refresh (for consumers)
 
@@ -79,40 +79,49 @@ deployed.
 
 ### Flow
 
+Example: the `lago-api` image, on `lago-api-base` and `lago-api-build`.
+
 ```mermaid
 flowchart TD
-  subgraph LP["lago-packages"]
+  subgraph LP["getlago/lago-packages"]
     PK["build-packages.yaml<br/>Build Wolfi packages"]
     T1(["daily 07:00 UTC<br/>push to apko/**<br/>by hand"])
     BB["build-bases.yaml<br/>Build apko base images<br/>(batch: picks the images)"]
-    BI["build-base.yaml<br/>one run per image<br/>apko, Trivy, push ghcr.io/getlago/&lt;base&gt;"]
+    BI["build-base.yaml<br/>one run per image, e.g. lago-api-base<br/>apko, Trivy, push ghcr.io/getlago/lago-api-base"]
     PK -- "workflow_run" --> BB
     T1 --> BB
     BB -- "1 workflow_dispatch per image" --> BI
     BI -- "change marker" --> BB
   end
-  subgraph CO["lago-infrastructure, lago-deploy (hold the tags)"]
+  subgraph API["getlago/lago-api (open source)"]
+    REL["release.yml<br/>Dockerfile on :latest bases<br/>push getlago/api:vX"]
+    BR["base-rebuild.yaml (builder, to add)<br/>calls rebuild.yaml<br/>push &lt;release&gt;-base.&lt;digest12&gt;"]
+  end
+  subgraph CO["deploy repository (private, holds the lago-api tag)"]
     T2(["daily 09:30 UTC<br/>by hand"])
     RB["refresh-bases.yaml<br/>calls base-refresh.yaml"]
     PL["plan.sh<br/>pins not on the newest base"]
-    BU["build job<br/>pin with no builder"]
-    DI["dispatch.sh<br/>pin with a builder"]
+    DI["dispatch.sh<br/>lago-api pin has a builder"]
     RF["refresh job<br/>Trivy, bump.sh, describe.sh"]
-    PR["PR base-refresh/&lt;name&gt;<br/>tag diff, base packages, fixed CVEs"]
-    T2 --> RB --> PL
-    PL --> BU --> RF
-    PL --> DI
+    PR["PR base-refresh/lago-api<br/>tag diff, base packages, fixed CVEs"]
+    T2 --> RB --> PL --> DI
     RF --> PR
   end
-  subgraph BL["builder (lago-sidekiqs)"]
-    BR["base-rebuild.yaml<br/>calls rebuild.yaml<br/>push &lt;release&gt;-base.&lt;digest12&gt;"]
-  end
+  BI -. ":latest at release time" .-> REL
   BB -- "base-updated, 1 per batch" --> RB
   DI -- "workflow_dispatch, waits" --> BR
   BR --> RF
-  PR -- "review, merge" --> AR["Argo CD (lago-mgmt)<br/>syncs the new tag"]
-  AR --> CL["clusters roll the pods"]
+  PR -- "review, merge" --> GO["GitOps sync<br/>the clusters roll the pods"]
 ```
+
+- A release of lago-api builds its `Dockerfile` on the `:latest` bases of that
+  day. Nothing in this repository starts it.
+- A deployed image stays on the base it was built on. The base refresh rebuilds
+  the **deployed commit** on the new base and opens a PR with the new tag.
+- An image that needs no secret has no `builder`: the deploy repository builds
+  it in its `build` job.
+- lago-api has no `base-rebuild.yaml` yet. It needs one before its deployed tag
+  can take part, because its build uses secrets.
 
 GitHub does not make links in a mermaid diagram clickable. Use this table:
 
@@ -120,12 +129,11 @@ GitHub does not make links in a mermaid diagram clickable. Use this table:
 | --- | --- | --- |
 | Build Wolfi packages | [runs](https://github.com/getlago/lago-packages/actions/workflows/build-packages.yaml) | [`build-packages.yaml`](.github/workflows/build-packages.yaml) |
 | Base batch | [runs](https://github.com/getlago/lago-packages/actions/workflows/build-bases.yaml) | [`build-bases.yaml`](.github/workflows/build-bases.yaml) |
-| One base image | [runs](https://github.com/getlago/lago-packages/actions/workflows/build-base.yaml) | [`build-base.yaml`](.github/workflows/build-base.yaml) |
+| One base image | [runs](https://github.com/getlago/lago-packages/actions/workflows/build-base.yaml) | [`build-base.yaml`](.github/workflows/build-base.yaml), [`apko/lago-api-base.yaml`](apko/lago-api-base.yaml) |
 | Base images | [packages](https://github.com/orgs/getlago/packages?repo_name=lago-packages) | [`apko/`](apko) |
-| Refresh, lago-infrastructure | [runs](https://github.com/getlago/lago-infrastructure/actions/workflows/refresh-bases.yaml) | [`base-refresh.yaml`](.github/workflows/base-refresh.yaml), [scripts](.github/actions/base-refresh) |
-| Refresh, lago-deploy | [runs](https://github.com/getlago/lago-deploy/actions/workflows/refresh-bases.yaml) | same |
-| Builder, lago-sidekiqs | [runs](https://github.com/getlago/lago-sidekiqs/actions/workflows/base-rebuild.yaml) | [`rebuild.yaml`](.github/workflows/rebuild.yaml) |
-| Bump PRs | [open](https://github.com/pulls?q=is%3Apr+is%3Aopen+org%3Agetlago+%22rebuild+on+the+fresh+lago-packages+base%22+in%3Atitle) | [`bump.sh`](.github/actions/base-refresh/bump.sh), [`describe.sh`](.github/actions/base-refresh/describe.sh) |
+| lago-api release | [runs](https://github.com/getlago/lago-api/actions/workflows/release.yml) | [`Dockerfile`](https://github.com/getlago/lago-api/blob/main/Dockerfile), [`release.yml`](https://github.com/getlago/lago-api/blob/main/.github/workflows/release.yml) |
+| Refresh (deploy repository) | private | [`base-refresh.yaml`](.github/workflows/base-refresh.yaml), [scripts](.github/actions/base-refresh) |
+| Rebuild (builder) | in the builder repository | [`rebuild.yaml`](.github/workflows/rebuild.yaml) |
 
 A failed base image is a red `build-base.yaml` run named after the image. The
 batch run stays green and lists every image run in its summary. The other
@@ -146,8 +154,8 @@ Three kinds of repository take part:
 | Repository | Does | Workflow |
 | --- | --- | --- |
 | lago-packages | publishes a base, sends `base-updated` | `build-bases.yaml` |
-| holds the tags (lago-infrastructure, lago-deploy) | plans, waits for the rebuild, scans it, opens the bump PR | calls `base-refresh.yaml` |
-| `builder` (lago-sidekiqs…) | rebuilds the **deployed commit** with its own secrets | `base-rebuild.yaml`, calls `rebuild.yaml` |
+| deploy repository (holds the tags) | plans, waits for the rebuild, scans it, opens the bump PR | calls `base-refresh.yaml` |
+| `builder` (e.g. lago-api) | rebuilds the **deployed commit** with its own secrets | `base-rebuild.yaml`, calls `rebuild.yaml` |
 
 The new tag is `<release>-base.<digest12>`. A pin with no `builder` is built
 by the repository that holds the tag, for an image that needs no secret.
@@ -309,8 +317,8 @@ rebuilding it on a timer would republish identical bytes.
 
 ### Key material
 
-The signing key is a `tls.PrivateKey` owned by the `packages` Pulumi project in
-`getlago/lago-infrastructure`. That project generates it, mirrors it to
+The signing key is a `tls.PrivateKey` owned by a Pulumi project in our private
+infrastructure repository. That project generates it, mirrors it to
 1Password, writes the private half to this repo as the `MELANGE_SIGNING_KEY`
 Actions secret, publishes the public half to `s3://lago-wolfi-packages/os/` for
 apko's keyring, and publishes the bucket role ARN here as `PACKAGES_ROLE_ARN`.

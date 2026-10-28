@@ -27,6 +27,12 @@ cves() {
     jq -r '.Results[]?.Vulnerabilities[]? | "\(.VulnerabilityID) \(.Severity) \(.PkgName)"' | sort -u
 }
 
+# "<id> <severity> <package>" lines in, one Markdown item per CVE out.
+by_cve() {
+  awk '{sev[$1] = $2; pkgs[$1] = pkgs[$1] (pkgs[$1] ? ", " : "") "`" $3 "`"}
+    END {for (id in sev) printf "- %s (%s): %s\n", id, sev[id], pkgs[id]}' | sort | head -n 50
+}
+
 pin=$(head -n1)
 repository=$(jq -r .repository <<<"$pin")
 old=$repository:$(jq -r .old <<<"$pin")
@@ -59,17 +65,17 @@ if cves "$old" >"$tmp/cve-old" && cves "$new" >"$tmp/cve-new"; then
   fixed=$(comm -23 "$tmp/cve-old" "$tmp/cve-new")
   added=$(comm -13 "$tmp/cve-old" "$tmp/cve-new")
   if [[ -n $fixed ]]; then
-    echo "Fixes $(wc -l <<<"$fixed" | tr -d ' ') OS findings (Trivy, old image against new image):"
+    echo "Fixes $(cut -d' ' -f1 <<<"$fixed" | sort -u | wc -l | tr -d ' ') OS CVEs (Trivy, old image against new image):"
     echo
-    awk '{printf "- %s (%s, `%s`)\n", $1, $2, $3}' <<<"$fixed" | head -n 50
+    by_cve <<<"$fixed"
   else
     echo "Fixes no OS finding. It keeps the image on the current base, so the next fix lands with no extra build."
   fi
   if [[ -n $added ]]; then
     echo
-    echo "New OS findings in the new image:"
+    echo "New OS CVEs in the new image:"
     echo
-    awk '{printf "- %s (%s, `%s`)\n", $1, $2, $3}' <<<"$added" | head -n 50
+    by_cve <<<"$added"
   fi
   echo
   echo "Still open in the new image: $(grep -cE ' (HIGH|CRITICAL) ' "$tmp/cve-new") HIGH/CRITICAL and $(grep -c . "$tmp/cve-new") total OS findings."
