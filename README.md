@@ -95,15 +95,15 @@ flowchart TD
   end
   subgraph API["getlago/lago-api (open source)"]
     REL["release.yml<br/>Dockerfile on :latest bases<br/>push getlago/api:vX"]
-    BR["base-rebuild.yaml (builder, to add)<br/>calls rebuild.yaml<br/>push &lt;release&gt;-base.&lt;digest12&gt;"]
   end
   subgraph CO["deploy repository (private, holds the lago-api tag)"]
     T2(["daily 09:30 UTC<br/>by hand"])
     RB["refresh-bases.yaml<br/>calls base-refresh.yaml"]
     PL["plan.sh<br/>pins not on the newest base"]
     DI["dispatch.sh<br/>lago-api pin has a builder"]
+    BR["base-rebuild.yaml (builder)<br/>calls rebuild.yaml with the lago-api Dockerfile<br/>push &lt;sha&gt;-base.&lt;digest12&gt;"]
     RF["refresh job<br/>Trivy, bump.sh, describe.sh"]
-    PR["PR base-refresh/lago-api<br/>tag diff, base packages, fixed CVEs"]
+    PR["PR base-refresh/api<br/>tag diff, base packages, fixed CVEs"]
     T2 --> RB --> PL --> DI
     RF --> PR
   end
@@ -120,8 +120,9 @@ flowchart TD
   the **deployed commit** on the new base and opens a PR with the new tag.
 - An image that needs no secret has no `builder`: the deploy repository builds
   it in its `build` job.
-- lago-api has no `base-rebuild.yaml` yet. It needs one before its deployed tag
-  can take part, because its build uses secrets.
+- The lago-api build needs a secret (the Sidekiq Pro credential), so the deploy
+  repository is also its `builder`: its `base-rebuild.yaml` checks out the
+  deployed lago-api commit and calls `rebuild.yaml`.
 
 GitHub does not make links in a mermaid diagram clickable. Use this table:
 
