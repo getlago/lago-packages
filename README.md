@@ -53,7 +53,7 @@ All are multi-arch (`x86_64`, `aarch64`).
 
 ## Tags
 
-- `:<YYYYMMDD>-r<run>` — immutable, one per publish. Pin to this (or to the digest) for reproducible builds.
+- `:<YYYYMMDD>-r<run>` — immutable, one per publish. Pin to this (or to the digest) for reproducible builds. `<run>` is the `build-base.yaml` run number + 1000, which keeps it above the tags of the older matrix build.
 - `:<commit-sha>` — immutable: set only the first time a commit publishes.
 - `:latest` — the newest publish. Rebuilt daily so it stays within ~24h of upstream Wolfi.
 - `:<YYYYMMDD>-r<run>-<arch>`, `:latest-<arch>` — the per-arch images behind the tags above.
@@ -138,15 +138,35 @@ GitHub does not make links in a mermaid diagram clickable. Use this table:
 
 A failed base image is a red `build-base.yaml` run named after the image. The
 batch run stays green and lists every image run in its summary. The other
-images still publish, and the batch still sends `base-updated`.
+images still publish, and the batch still sends `base-updated`. The batch turns
+red only when it cannot start an image run.
+
+`base-updated` comes from the batch, once, for the images that changed while it
+waited. An image run sends its own when the batch does not cover it:
+
+- started by hand (`notify` defaults to true),
+- a re-run, for example of a red image after its fix,
+- it ended after the batch stopped waiting (110-minute deadline, or the batch
+  was cancelled).
+
+To rebuild one image, run `build-base.yaml` by hand with its `image` input.
 
 To trace a deployed tag `<release>-base.<digest12>`:
 
 1. Open its bump PR. The body has the base build, the refresh run, the base
    packages that changed and the CVEs that the new base fixes.
-2. Without the PR: `<digest12>` is the start of the base index digest. `crane ls
-   ghcr.io/getlago/<base>` lists the `<YYYYMMDD>-r<run number>` tag of that
-   digest, and the run number is the `build-base.yaml` run that pushed it.
+2. Without the PR: `<digest12>` is the start of the base index digest. The
+   index names the run that published it:
+
+   ```sh
+   for t in $(crane ls ghcr.io/getlago/<base> | grep -E '^[0-9]{8}-r[0-9]+$'); do
+     crane digest ghcr.io/getlago/<base>:$t | grep -q '^sha256:<digest12>' && echo "$t"
+   done
+   crane manifest ghcr.io/getlago/<base>:<that tag> | jq -r '.annotations["dev.getlago.build-run"]'
+   ```
+
+   A base published before the annotation existed has none. Its run number is
+   in the tag.
 
 ### Repositories
 

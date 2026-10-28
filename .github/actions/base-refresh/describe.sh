@@ -7,6 +7,8 @@
 # Best effort: a failed lookup prints a note, never fails the bump.
 # Needs jq, crane and trivy, logged in to the registry.
 set -uo pipefail
+# join needs the byte order that sort uses.
+export LC_ALL=C
 
 # Prints "<package> <version>" lines of the apk database in the first $2
 # layers of image $1 (linux/amd64). The database is in the base layers.
@@ -28,10 +30,12 @@ cves() {
     jq -r '.Results[]?.Vulnerabilities[]? | "\(.VulnerabilityID) \(.Severity) \(.PkgName)"' | sort -u
 }
 
-# "<id> <severity> <package>" lines in, one Markdown item per CVE out.
+# "<id> <severity> <package>" lines in, one Markdown item per CVE out, at
+# most 50 (a PR body holds 65536 characters).
 by_cve() {
   awk '{sev[$1] = $2; pkgs[$1] = pkgs[$1] (pkgs[$1] ? ", " : "") "`" $3 "`"}
-    END {for (id in sev) printf "- %s (%s): %s\n", id, sev[id], pkgs[id]}' | sort | head -n 50
+    END {for (id in sev) printf "- %s (%s): %s\n", id, sev[id], pkgs[id]}' | sort |
+    awk 'NR <= 50 {print} END {if (NR > 50) printf "- … and %d more\n", NR - 50}'
 }
 
 # Prints the What/Why sections for one old -> new pair. $1: plan.sh JSON line.
@@ -47,13 +51,16 @@ describe() {
   echo
   echo "New base: \`$base\`."
   echo
+  # The base layers of both images, counted on the new base. A base whose
+  # layer count changed between builds compares the wrong layers.
   n=$(crane config "$base" | jq '.rootfs.diff_ids | length' 2>/dev/null)
   if [[ -n $n ]] && packages "$old" "$n" >"$tmp/old" && packages "$new" "$n" >"$tmp/new"; then
     join -a1 -a2 -e '-' -o 0,1.2,2.2 "$tmp/old" "$tmp/new" | awk '$2 != $3' >"$tmp/diff"
     if [[ -s $tmp/diff ]]; then
       echo "| Base package | Old | New |"
       echo "| --- | --- | --- |"
-      awk '{printf "| `%s` | %s | %s |\n", $1, $2, $3}' "$tmp/diff"
+      awk 'NR <= 100 {printf "| `%s` | %s | %s |\n", $1, $2, $3}
+        END {if (NR > 100) printf "\n… and %d more packages.\n", NR - 100}' "$tmp/diff"
     else
       echo "No apk package changed: the base moved for another reason (file or metadata change)."
     fi

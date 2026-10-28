@@ -21,6 +21,11 @@ on:
         required: false
         type: boolean
         default: true
+      sha:
+        description: 'Commit to build. The batch passes the commit it evaluated. Empty = the tip of the ref.'
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -42,6 +47,7 @@ env:
   PACKAGES_BUCKET: lago-wolfi-packages
   IMAGE_NAME: ${{ inputs.image }}
   FILE: apko/${{ inputs.image }}.yaml
+  SRC_SHA: ${{ inputs.sha || github.sha }}
 
 jobs:
   build:
@@ -50,6 +56,8 @@ jobs:
       changed: ${{ steps.diff.outputs.changed }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SRC_SHA }}
 
       - name: Check the manifest exists
         run: |
@@ -143,7 +151,7 @@ jobs:
             apko build \
               --arch "$arch" \
               ${{ env.FILE }} \
-              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.SRC_SHA }} \
               "image-$arch.tar"
             # apko writes sbom-<arch>.spdx.json next to the tarball on every
             # build. Keep it under a per-arch name so the second pass cannot
@@ -244,8 +252,10 @@ jobs:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
           set -euo pipefail
-          # Immutable and sortable; `:<sha>` repeats on daily runs.
-          tag="$(date -u +%Y%m%d)-r${GITHUB_RUN_NUMBER}"
+          # Immutable and sortable; `:<sha>` repeats on daily runs. +1000: this
+          # workflow counts from 1, and the tags of the matrix build it
+          # replaced reached r7x. The offset keeps every new tag above them.
+          tag="$(date -u +%Y%m%d)-r$((GITHUB_RUN_NUMBER + 1000))"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           for arch in x86_64 aarch64; do
             crane push "image-$arch.tar" "$IMAGE:$tag-$arch"
@@ -262,12 +272,14 @@ jobs:
         run: |
           set -euo pipefail
           tags=(-t "$IMAGE:$TAG" -t "$IMAGE:latest")
-          if crane digest "$IMAGE:${{ github.sha }}" >/dev/null 2>&1; then
-            echo "$IMAGE:${{ github.sha }} exists, leaving it in place"
+          if crane digest "$IMAGE:${{ env.SRC_SHA }}" >/dev/null 2>&1; then
+            echo "$IMAGE:${{ env.SRC_SHA }} exists, leaving it in place"
           else
-            tags+=(-t "$IMAGE:${{ github.sha }}")
+            tags+=(-t "$IMAGE:${{ env.SRC_SHA }}")
           fi
+          # The annotation links the index to this run: bump PRs read it.
           docker buildx imagetools create "${tags[@]}" \
+            --annotation "index:dev.getlago.build-run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             "$IMAGE:$TAG-x86_64" "$IMAGE:$TAG-aarch64"
           echo "digest=$(crane digest "$IMAGE:$TAG")" >> "$GITHUB_OUTPUT"
 
@@ -330,10 +342,14 @@ jobs:
 
   notify:
     # Tells the consumers a base moved; their `base-refresh plan` reads the
-    # new digests itself. A batch run sends one notice for all its images.
+    # new digests itself. In a batch, the batch sends one notice for all its
+    # images. This run sends its own when nothing else will: started by hand,
+    # re-run, or its batch no longer waits for it (deadline, cancel).
     needs: build
-    if: inputs.notify && needs.build.outputs.changed == 'true'
+    if: needs.build.outputs.changed == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
     strategy:
       matrix:
         repository: [getlago/lago-deploy, getlago/lago-infrastructure]
@@ -341,9 +357,30 @@ jobs:
       # Without it the consumers catch up on their daily run.
       HAS_TOKEN: ${{ secrets.BASE_UPDATE_DISPATCH_TOKEN != '' }}
     steps:
+      - name: Does the batch cover this image?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTIFY: ${{ inputs.notify }}
+          PARENT: ${{ inputs.parent }}
+        run: |
+          set -uo pipefail
+          send=false
+          if [[ $NOTIFY == true || $GITHUB_RUN_ATTEMPT -gt 1 ]]; then
+            send=true
+          elif [[ -n $PARENT ]]; then
+            # The batch reads the change markers only while its wait step runs.
+            wait=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/${PARENT%%.*}/attempts/${PARENT##*.}/jobs" \
+              --jq '[.jobs[] | select(.name == "dispatch") | .steps[] | select(.name == "Wait for the image runs") | .status][0] // "completed"') ||
+              wait=completed
+            [[ $wait == completed ]] && send=true
+          fi
+          echo "send=$send" >>"$GITHUB_OUTPUT"
+          echo "notify=$NOTIFY attempt=$GITHUB_RUN_ATTEMPT parent=$PARENT -> send=$send"
+
       # Cross-repo `contents: write`; GITHUB_TOKEN cannot do it.
       - name: Dispatch base-updated
-        if: env.HAS_TOKEN == 'true'
+        if: env.HAS_TOKEN == 'true' && steps.gate.outputs.send == 'true'
         uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ secrets.BASE_UPDATE_DISPATCH_TOKEN }}

@@ -135,23 +135,39 @@ jobs:
     steps:
       - name: Start one run per image
         run: |
-          set -euo pipefail
+          set -uo pipefail
           # A workflow_dispatch from GITHUB_TOKEN starts a run, unlike most
           # events. The image runs send no base-updated: this run sends one
-          # for the batch.
-          jq -r '.[].repo' <<<"$MATRIX" | while read -r image; do
-            gh workflow run build-base.yaml --ref "$GITHUB_REF_NAME" \
-              -f image="$image" -f parent="$PARENT" -f notify=false
-            echo "started $image"
-          done
+          # for the batch. They build the commit `discover` read, not the tip
+          # of the ref. A dispatch that fails 3 times is skipped, so the
+          # images already started are still waited for and announced; the
+          # last step fails this run for it.
+          : >started.txt
+          : >failed.txt
+          while read -r image; do
+            for try in 1 2 3; do
+              if gh workflow run build-base.yaml --ref "$GITHUB_REF_NAME" \
+                  -f image="$image" -f parent="$PARENT" -f notify=false -f sha="$GITHUB_SHA"; then
+                echo "$image" >>started.txt
+                echo "started $image"
+                continue 2
+              fi
+              sleep $((try * 10))
+            done
+            echo "::error title=$image::could not start its run"
+            echo "$image" >>failed.txt
+          done < <(jq -r '.[].repo' <<<"$MATRIX")
 
       - name: Wait for the image runs
         # Ends on its own at the deadline, before timeout-minutes, so the
         # summary below still sees the last poll. A failed poll is retried.
+        # build-base.yaml reads this step's status: an image run that ends
+        # after it announces itself.
+        if: ${{ !cancelled() }}
         timeout-minutes: 120
         run: |
           set -uo pipefail
-          want=$(jq length <<<"$MATRIX")
+          want=$(grep -c . started.txt)
           deadline=$(( $(date +%s) + 110 * 60 ))
           echo '[]' >runs.json
           while :; do
@@ -196,6 +212,14 @@ jobs:
             echo "| \`$image\` | [$result]($url) | $published |" >>"$GITHUB_STEP_SUMMARY"
           done < <(jq -c 'sort_by(.displayTitle) | .[]' runs.json 2>/dev/null)
           echo "changed=$changed" >>"$GITHUB_OUTPUT"
+
+      - name: Fail on images that never started
+        if: ${{ !cancelled() }}
+        run: |
+          if [[ -s failed.txt ]]; then
+            echo "::error::no run started for: $(paste -sd' ' failed.txt)"
+            exit 1
+          fi
 
   notify:
     # Tells the consumers a base moved; their `base-refresh plan` reads the
