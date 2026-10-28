@@ -38,6 +38,8 @@ an SBOM, and every image is signed with cosign (keyless, via GitHub OIDC).
 | `ghcr.io/getlago/rev-rec-build` | python-3.13 + headers, uv, build-base | build stage of `rev-rec` |
 | `ghcr.io/getlago/rev-rec-flink-base` | flink-1.20 (overlay), openjdk-17-jre, jemalloc, flink uid 9999 | JobManager/TaskManager image of `rev-rec` |
 | `ghcr.io/getlago/rev-rec-flink-build` | go, git | Beam `boot` build stage of the `rev-rec` flink image |
+| `ghcr.io/getlago/flink-paimon-base` | flink-1.20 (overlay), openjdk-17-jre, jemalloc, flink uid 9999 | runtime of `infra/flink-paimon` (lago-infrastructure) |
+| `ghcr.io/getlago/flink-paimon-build` | openjdk-17 (JDK), bash, nonroot | build stages and tests of `infra/flink-paimon` |
 | `ghcr.io/getlago/self-billing-base` | python-3.13, nonroot, no shell | runtime stage of `lago-self-billing` |
 | `ghcr.io/getlago/self-billing-build` | python-3.13, uv, busybox | build stage of `lago-self-billing` |
 | `ghcr.io/getlago/superset-base` | python-3.12, libstdc++, nonroot, no shell | runtime stage of `data/superset` (lago-data `dashboards/`) |
