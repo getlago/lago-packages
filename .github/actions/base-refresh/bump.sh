@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Writes the new tags of one image (plan.sh JSON lines on stdin) into the
-# values files, then opens or updates its PR on base-refresh/<name>.
-# Needs yq, jq, gh (GH_TOKEN with contents + pull-requests write).
+# values files, then opens or updates its PR on base-refresh/<name>. The PR
+# body says what changed in the base and why (describe.sh).
+# Needs yq, jq, gh (GH_TOKEN with contents + pull-requests write), and crane
+# and trivy logged in to the registry.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -12,6 +14,7 @@ Only `RUNTIME_IMAGE` is set. The build stage uses the Dockerfile's default build
 
 MD
 
+pins=$(cat)
 while read -r pin; do
   name=$(jq -r .name <<<"$pin")
   file=$(jq -r .file <<<"$pin")
@@ -29,13 +32,21 @@ while read -r pin; do
   value=$(yq "$path" "$file")
   [[ ${value##*:} == "$new" ]] || { echo "$file: $path is not $new" >&2; exit 1; }
   echo "- \`$file\` \`$path\`: \`$old\` → \`$new\`" >>"$body"
-done
+done <<<"$pins"
 
 if git diff --quiet; then
   echo "No tag to change." >&2
   exit 0
 fi
-[[ -n ${RUN_URL:-} ]] && printf '\nRun: %s\n' "$RUN_URL" >>"$body"
+{
+  echo
+  describe.sh <<<"$pins"
+  echo
+  # TRIGGER_URL: the lago-packages batch that published the base (the
+  # base-updated payload). Empty on a scheduled or manual refresh.
+  if [[ -n ${TRIGGER_URL:-} ]]; then echo "Base build: $TRIGGER_URL"; fi
+  if [[ -n ${RUN_URL:-} ]]; then echo "Refresh run: $RUN_URL"; fi
+} >>"$body"
 
 BRANCH=base-refresh/$name
 TITLE="chore($name): rebuild on the fresh lago-packages base"

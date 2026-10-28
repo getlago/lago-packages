@@ -75,7 +75,73 @@ dispatch only delays a refresh.
 ## Base refresh (for consumers)
 
 A new base fixes nothing until the images built on it are rebuilt and
-deployed. Three kinds of repository take part:
+deployed.
+
+### Flow
+
+```mermaid
+flowchart TD
+  subgraph LP["lago-packages"]
+    PK["build-packages.yaml<br/>Build Wolfi packages"]
+    T1(["daily 07:00 UTC<br/>push to apko/**<br/>by hand"])
+    BB["build-bases.yaml<br/>Build apko base images<br/>(batch: picks the images)"]
+    BI["build-base.yaml<br/>one run per image<br/>apko, Trivy, push ghcr.io/getlago/&lt;base&gt;"]
+    PK -- "workflow_run" --> BB
+    T1 --> BB
+    BB -- "1 workflow_dispatch per image" --> BI
+    BI -- "change marker" --> BB
+  end
+  subgraph CO["lago-infrastructure, lago-deploy (hold the tags)"]
+    T2(["daily 09:30 UTC<br/>by hand"])
+    RB["refresh-bases.yaml<br/>calls base-refresh.yaml"]
+    PL["plan.sh<br/>pins not on the newest base"]
+    BU["build job<br/>pin with no builder"]
+    DI["dispatch.sh<br/>pin with a builder"]
+    RF["refresh job<br/>Trivy, bump.sh, describe.sh"]
+    PR["PR base-refresh/&lt;name&gt;<br/>tag diff, base packages, fixed CVEs"]
+    T2 --> RB --> PL
+    PL --> BU --> RF
+    PL --> DI
+    RF --> PR
+  end
+  subgraph BL["builder (lago-sidekiqs)"]
+    BR["base-rebuild.yaml<br/>calls rebuild.yaml<br/>push &lt;release&gt;-base.&lt;digest12&gt;"]
+  end
+  BB -- "base-updated, 1 per batch" --> RB
+  DI -- "workflow_dispatch, waits" --> BR
+  BR --> RF
+  PR -- "review, merge" --> AR["Argo CD (lago-mgmt)<br/>syncs the new tag"]
+  AR --> CL["clusters roll the pods"]
+```
+
+GitHub does not make links in a mermaid diagram clickable. Use this table:
+
+| Step | Runs | Source |
+| --- | --- | --- |
+| Build Wolfi packages | [runs](https://github.com/getlago/lago-packages/actions/workflows/build-packages.yaml) | [`build-packages.yaml`](.github/workflows/build-packages.yaml) |
+| Base batch | [runs](https://github.com/getlago/lago-packages/actions/workflows/build-bases.yaml) | [`build-bases.yaml`](.github/workflows/build-bases.yaml) |
+| One base image | [runs](https://github.com/getlago/lago-packages/actions/workflows/build-base.yaml) | [`build-base.yaml`](.github/workflows/build-base.yaml) |
+| Base images | [packages](https://github.com/orgs/getlago/packages?repo_name=lago-packages) | [`apko/`](apko) |
+| Refresh, lago-infrastructure | [runs](https://github.com/getlago/lago-infrastructure/actions/workflows/refresh-bases.yaml) | [`base-refresh.yaml`](.github/workflows/base-refresh.yaml), [scripts](.github/actions/base-refresh) |
+| Refresh, lago-deploy | [runs](https://github.com/getlago/lago-deploy/actions/workflows/refresh-bases.yaml) | same |
+| Builder, lago-sidekiqs | [runs](https://github.com/getlago/lago-sidekiqs/actions/workflows/base-rebuild.yaml) | [`rebuild.yaml`](.github/workflows/rebuild.yaml) |
+| Bump PRs | [open](https://github.com/pulls?q=is%3Apr+is%3Aopen+org%3Agetlago+%22rebuild+on+the+fresh+lago-packages+base%22+in%3Atitle) | [`bump.sh`](.github/actions/base-refresh/bump.sh), [`describe.sh`](.github/actions/base-refresh/describe.sh) |
+
+A failed base image is a red `build-base.yaml` run named after the image. The
+batch run stays green and lists every image run in its summary. The other
+images still publish, and the batch still sends `base-updated`.
+
+To trace a deployed tag `<release>-base.<digest12>`:
+
+1. Open its bump PR. The body has the base build, the refresh run, the base
+   packages that changed and the CVEs that the new base fixes.
+2. Without the PR: `<digest12>` is the start of the base index digest. `crane ls
+   ghcr.io/getlago/<base>` lists the `<YYYYMMDD>-r<run number>` tag of that
+   digest, and the run number is the `build-base.yaml` run that pushed it.
+
+### Repositories
+
+Three kinds of repository take part:
 
 | Repository | Does | Workflow |
 | --- | --- | --- |
@@ -254,7 +320,10 @@ Nothing in this repo creates or rotates it.
 
 `build-packages.yaml` builds apks, `build-bases.yaml` builds images and chains
 off it. Inside `build-bases.yaml`, `discover` picks the manifests this event
-needs and `build` runs the matrix over them.
+needs, and `dispatch` starts one `build-base.yaml` run per manifest and waits
+for them. Each image has its own run, so a failure is easy to find and does not
+turn the other images red. To rebuild one image, run `build-base.yaml` by hand
+with its `image` input.
 
 `apko build` produces a local multi-arch OCI tarball, Trivy scans that tarball
 for fixable HIGH/CRITICAL CVEs, and only then does crane push the *exact* bytes
