@@ -6,6 +6,8 @@ on:
     paths:
       - "apko/**"
       - ".github/workflows/build-bases.yaml"
+      # The build steps live here: a change must rebuild every image too.
+      - ".github/workflows/build-base.yaml"
   workflow_run:
     # build-packages.yaml publishes the apks the overlay consumers install. A
     # push that changes a recipe must not rebuild those images in parallel —
@@ -81,8 +83,8 @@ jobs:
               if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
                 files=$(ls apko/*.yaml)
               else
-                CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}" -- apko .github/workflows/build-bases.yaml 2>/dev/null || true)
-                if echo "$CHANGED" | grep -qx '\.github/workflows/build-bases\.yaml'; then
+                CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}" -- apko .github/workflows/build-bases.yaml .github/workflows/build-base.yaml 2>/dev/null || true)
+                if echo "$CHANGED" | grep -qxE '\.github/workflows/build-bases?\.yaml'; then
                   # Workflow-level change — rebuild all manifests so the fix lands uniformly.
                   files=$(ls apko/*.yaml)
                 else
@@ -121,14 +123,15 @@ jobs:
       # Start the image runs and download their change markers.
       actions: write
     outputs:
-      changed: ${{ steps.wait.outputs.changed }}
+      changed: ${{ steps.summary.outputs.changed }}
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       MATRIX: ${{ needs.discover.outputs.matrix }}
       # build-base.yaml puts this in its run name: that is how this run finds
-      # its image runs.
-      BATCH: (batch ${{ github.run_id }})
+      # its image runs. The attempt keeps a re-run off the runs of the
+      # attempt before it.
+      PARENT: ${{ github.run_id }}.${{ github.run_attempt }}
     steps:
       - name: Start one run per image
         run: |
@@ -138,27 +141,43 @@ jobs:
           # for the batch.
           jq -r '.[].repo' <<<"$MATRIX" | while read -r image; do
             gh workflow run build-base.yaml --ref "$GITHUB_REF_NAME" \
-              -f image="$image" -f parent="$GITHUB_RUN_ID" -f notify=false
+              -f image="$image" -f parent="$PARENT" -f notify=false
             echo "started $image"
           done
 
       - name: Wait for the image runs
-        id: wait
+        # Ends on its own at the deadline, before timeout-minutes, so the
+        # summary below still sees the last poll. A failed poll is retried.
         timeout-minutes: 120
         run: |
-          set -euo pipefail
+          set -uo pipefail
           want=$(jq length <<<"$MATRIX")
+          deadline=$(( $(date +%s) + 110 * 60 ))
+          echo '[]' >runs.json
           while :; do
-            runs=$(gh run list --workflow build-base.yaml --event workflow_dispatch --limit 200 \
-              --json databaseId,displayTitle,status,conclusion,url |
-              jq --arg b "$BATCH" '[.[] | select(.displayTitle | endswith($b))]')
-            got=$(jq length <<<"$runs")
-            open=$(jq '[.[] | select(.status != "completed")] | length' <<<"$runs")
-            echo "$got/$want started, $open not finished"
-            [[ $got -ge $want && $open == 0 ]] && break
+            if list=$(gh run list --workflow build-base.yaml --event workflow_dispatch --limit 200 \
+                --json databaseId,displayTitle,status,conclusion,url); then
+              jq --arg b " (batch $PARENT)" '[.[] | select(.displayTitle | endswith($b))]' <<<"$list" >runs.json
+              got=$(jq length runs.json)
+              open=$(jq '[.[] | select(.status != "completed")] | length' runs.json)
+              echo "$got/$want started, $open not finished"
+              [[ $got -ge $want && $open == 0 ]] && break
+            else
+              echo "::warning::gh run list failed, retrying"
+            fi
+            if (( $(date +%s) > deadline )); then
+              echo "::warning::image runs not finished after 110 minutes; summarizing what finished"
+              break
+            fi
             sleep 30
           done
 
+      - name: Summarize and collect the change markers
+        id: summary
+        # Also after a failed wait: published images must still be announced.
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
           # A failed image does not fail this run: its own run is red.
           {
             echo "| Image | Result | Published |"
@@ -167,15 +186,15 @@ jobs:
           changed=false
           while read -r run; do
             id=$(jq -r .databaseId <<<"$run") url=$(jq -r .url <<<"$run")
-            conclusion=$(jq -r .conclusion <<<"$run")
+            result=$(jq -r '.conclusion // "" | if . == "" then "not finished" else . end' <<<"$run")
             image=$(jq -r '.displayTitle | sub(" \\(batch .*$"; "")' <<<"$run")
             published=no
-            if [[ $conclusion == success ]] && gh run download "$id" -n "changed-$image" -D "changed/$image" 2>/dev/null; then
+            if [[ $result == success ]] && gh run download "$id" -n "changed-$image" -D "changed/$image" 2>/dev/null; then
               published=yes changed=true
             fi
-            [[ $conclusion == success ]] || echo "::warning title=$image::$conclusion: $url"
-            echo "| \`$image\` | [$conclusion]($url) | $published |" >>"$GITHUB_STEP_SUMMARY"
-          done < <(jq -c 'sort_by(.displayTitle) | .[]' <<<"$runs")
+            [[ $result == success ]] || echo "::warning title=$image::$result: $url"
+            echo "| \`$image\` | [$result]($url) | $published |" >>"$GITHUB_STEP_SUMMARY"
+          done < <(jq -c 'sort_by(.displayTitle) | .[]' runs.json 2>/dev/null)
           echo "changed=$changed" >>"$GITHUB_OUTPUT"
 
   notify:
@@ -183,7 +202,7 @@ jobs:
     # new digests itself. One notice per batch, also when an image failed: the
     # others published.
     needs: dispatch
-    if: needs.dispatch.outputs.changed == 'true'
+    if: ${{ !cancelled() && needs.dispatch.outputs.changed == 'true' }}
     runs-on: ubuntu-latest
     strategy:
       matrix:

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Prints the "what changed and why" part of a bump PR body, in Markdown, for
-# one image: plan.sh JSON lines on stdin (pins of one image share the tags).
+# one image: plan.sh JSON lines on stdin. Pins of one name can sit on
+# different deployed tags: each old -> new pair gets its own section.
 # What: the apk packages of the base layers, old image against new image.
 # Why: the OS CVEs (Trivy, any severity) the new image no longer has.
 # Best effort: a failed lookup prints a note, never fails the bump.
@@ -33,54 +34,73 @@ by_cve() {
     END {for (id in sev) printf "- %s (%s): %s\n", id, sev[id], pkgs[id]}' | sort | head -n 50
 }
 
-pin=$(head -n1)
-repository=$(jq -r .repository <<<"$pin")
-old=$repository:$(jq -r .old <<<"$pin")
-new=$repository:$(jq -r .tag <<<"$pin")
-base=$(jq -r .base <<<"$pin")
-tmp=$(mktemp -d)
+# Prints the What/Why sections for one old -> new pair. $1: plan.sh JSON line.
+describe() {
+  local repository old new base tmp n fixed added
+  repository=$(jq -r .repository <<<"$1")
+  old=$repository:$(jq -r .old <<<"$1")
+  new=$repository:$(jq -r .tag <<<"$1")
+  base=$(jq -r .base <<<"$1")
+  tmp=$(mktemp -d)
 
-echo "### What changed"
-echo
-echo "New base: \`$base\`."
-echo
-n=$(crane config "$base" | jq '.rootfs.diff_ids | length' 2>/dev/null)
-if [[ -n $n ]] && packages "$old" "$n" >"$tmp/old" && packages "$new" "$n" >"$tmp/new"; then
-  join -a1 -a2 -e '-' -o 0,1.2,2.2 "$tmp/old" "$tmp/new" | awk '$2 != $3' >"$tmp/diff"
-  if [[ -s $tmp/diff ]]; then
-    echo "| Base package | Old | New |"
-    echo "| --- | --- | --- |"
-    awk '{printf "| `%s` | %s | %s |\n", $1, $2, $3}' "$tmp/diff"
-  else
-    echo "No apk package changed: the base moved for another reason (file or metadata change)."
-  fi
-else
-  echo "Could not read the apk database of the base layers."
-fi
-
-echo
-echo "### Why"
-echo
-if cves "$old" >"$tmp/cve-old" && cves "$new" >"$tmp/cve-new"; then
-  fixed=$(comm -23 "$tmp/cve-old" "$tmp/cve-new")
-  added=$(comm -13 "$tmp/cve-old" "$tmp/cve-new")
-  if [[ -n $fixed ]]; then
-    echo "Fixes $(cut -d' ' -f1 <<<"$fixed" | sort -u | wc -l | tr -d ' ') OS CVEs (Trivy, old image against new image):"
-    echo
-    by_cve <<<"$fixed"
-  else
-    echo "Fixes no OS finding. It keeps the image on the current base, so the next fix lands with no extra build."
-  fi
-  if [[ -n $added ]]; then
-    echo
-    echo "New OS CVEs in the new image:"
-    echo
-    by_cve <<<"$added"
-  fi
+  echo "### What changed"
   echo
-  echo "Still open in the new image: $(grep -cE ' (HIGH|CRITICAL) ' "$tmp/cve-new") HIGH/CRITICAL and $(grep -c . "$tmp/cve-new") total OS findings."
+  echo "New base: \`$base\`."
+  echo
+  n=$(crane config "$base" | jq '.rootfs.diff_ids | length' 2>/dev/null)
+  if [[ -n $n ]] && packages "$old" "$n" >"$tmp/old" && packages "$new" "$n" >"$tmp/new"; then
+    join -a1 -a2 -e '-' -o 0,1.2,2.2 "$tmp/old" "$tmp/new" | awk '$2 != $3' >"$tmp/diff"
+    if [[ -s $tmp/diff ]]; then
+      echo "| Base package | Old | New |"
+      echo "| --- | --- | --- |"
+      awk '{printf "| `%s` | %s | %s |\n", $1, $2, $3}' "$tmp/diff"
+    else
+      echo "No apk package changed: the base moved for another reason (file or metadata change)."
+    fi
+  else
+    echo "Could not read the apk database of the base layers."
+  fi
+
+  echo
+  echo "### Why"
+  echo
+  if cves "$old" >"$tmp/cve-old" && cves "$new" >"$tmp/cve-new"; then
+    # By CVE id: a CVE still open on any package of the new image is not
+    # fixed, also when its package was renamed.
+    cut -d' ' -f1 "$tmp/cve-old" | sort -u >"$tmp/id-old"
+    cut -d' ' -f1 "$tmp/cve-new" | sort -u >"$tmp/id-new"
+    fixed=$(comm -23 "$tmp/id-old" "$tmp/id-new" | grep -Fwf - "$tmp/cve-old")
+    added=$(comm -13 "$tmp/id-old" "$tmp/id-new" | grep -Fwf - "$tmp/cve-new")
+    if [[ -n $fixed ]]; then
+      echo "Fixes $(comm -23 "$tmp/id-old" "$tmp/id-new" | grep -c .) OS CVEs (Trivy, old image against new image):"
+      echo
+      by_cve <<<"$fixed"
+    else
+      echo "Fixes no OS finding. It keeps the image on the current base, so the next fix lands with no extra build."
+    fi
+    if [[ -n $added ]]; then
+      echo
+      echo "New OS CVEs in the new image:"
+      echo
+      by_cve <<<"$added"
+    fi
+    echo
+    echo "Still open in the new image: $(grep -E ' (HIGH|CRITICAL) ' "$tmp/cve-new" | cut -d' ' -f1 | sort -u | grep -c .) HIGH/CRITICAL and $(grep -c . "$tmp/id-new") total OS CVEs."
+  else
+    echo "Could not scan the old and new images with Trivy."
+  fi
+  rm -rf "$tmp"
+}
+
+pairs=$(jq -sc 'unique_by([.repository, .old, .tag]) | .[]')
+if [[ $(grep -c . <<<"$pairs") -le 1 ]]; then
+  describe "$pairs"
 else
-  echo "Could not scan the old and new images with Trivy."
+  while read -r pair; do
+    echo "## \`$(jq -r '.old + " → " + .tag' <<<"$pair")\`"
+    echo
+    describe "$pair" | sed 's/^### /#### /'
+    echo
+  done <<<"$pairs"
 fi
-rm -rf "$tmp"
 exit 0

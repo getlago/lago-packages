@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       parent:
-        description: 'Run id of the build-bases.yaml batch that started this run. Empty when started by hand.'
+        description: '<run id>.<attempt> of the build-bases.yaml batch that started this run. Empty when started by hand.'
         required: false
         type: string
         default: ""
