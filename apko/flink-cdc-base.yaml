@@ -1,0 +1,67 @@
+# Runtime for the postgres-to-redpanda FlinkDeployment (getlago/lago-infrastructure
+# images/flink-cdc). Replaces `flink:1.20.5-java11`, which is Ubuntu-based and
+# needs apt pins for each new CVE.
+#
+# Fixed for this one image: Flink 1.20 on JRE 11 (packages/flink-cdc-1.20.yaml),
+# with the S3 filesystem plugin enabled. The CDC dist, the patched Kafka and
+# Postgres pipeline connectors, the Postgres JDBC driver and the seed jar are
+# added by the consumer Dockerfile. So is the securerandom.source edit in the
+# JRE's java.security, which this image cannot own.
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+    - ./repo-local
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    - ./repo-local/lago-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - tzdata
+    - flink-cdc-1.20
+
+accounts:
+  groups:
+    - groupname: flink
+      gid: 9999
+  users:
+    - username: flink
+      uid: 9999
+      gid: 9999
+      homedir: /opt/flink
+  run-as: 9999
+
+paths:
+  # Upstream chowns $FLINK_HOME to flink. docker-entrypoint.sh rewrites
+  # conf/config.yaml and links plugins/, and Flink writes log/.
+  - path: /opt/flink
+    type: permissions
+    permissions: 0o755
+    uid: 9999
+    gid: 9999
+    recursive: true
+
+environment:
+  FLINK_HOME: /opt/flink
+  # No Wolfi JRE package installs /usr/bin/java: put the JRE on PATH.
+  JAVA_HOME: /usr/lib/jvm/java-11-openjdk
+  PATH: /opt/flink/bin:/usr/lib/jvm/java-11-openjdk/bin:/usr/local/bin:/usr/bin:/bin
+  # Java 11 takes its default charset from the locale. flink:1.20.5-java11 set
+  # en_US.UTF-8; without LANG the JVM falls back to ASCII and writes `?` for
+  # every non-ASCII character in CDC payloads it encodes without a charset.
+  LANG: C.UTF-8
+
+archs:
+  - x86_64
+  - aarch64
+
+work-dir: /opt/flink
+
+entrypoint:
+  command: /docker-entrypoint.sh
+cmd: help
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.licenses: AGPL-3.0
+  org.opencontainers.image.description: Hardened Wolfi-based Flink 1.20 + JRE11 runtime image for the flink-cdc (postgres-to-redpanda) FlinkDeployment
