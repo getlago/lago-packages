@@ -1,0 +1,72 @@
+# Runtime for infra/flink-paimon (lago-infrastructure images/flink-paimon): the
+# Redpanda -> Paimon and Paimon -> Postgres FlinkDeployments and the leg-3 init
+# Job. Replaces `flink:1.20.5-java17`, which is Ubuntu-based.
+#
+# Flink comes from the Lago overlay (packages/flink-1.20.yaml), as in
+# rev-rec-flink-base. The consumer Dockerfile adds the Paimon, Kafka and JDBC
+# jars to /opt/flink/lib with `ADD --checksum`, so it needs no download tool.
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+    # Lago's melange overlay, synced from S3 by build-bases.yaml.
+    - ./repo-local
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    - ./repo-local/lago-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - tzdata
+    # Pulls bash, busybox, gettext, jemalloc and openjdk-17-jre. The leg-3
+    # tools are compiled for Java 17 (flink-paimon-build).
+    - flink-1.20
+
+# Same uid/gid as the upstream image, so checkpoints and savepoints written by
+# the old image stay readable, and the operator's defaults still apply.
+accounts:
+  groups:
+    - groupname: flink
+      gid: 9999
+  users:
+    - username: flink
+      uid: 9999
+      gid: 9999
+      homedir: /opt/flink
+  run-as: 9999
+
+paths:
+  # Upstream chowns $FLINK_HOME to flink. docker-entrypoint.sh rewrites
+  # conf/config.yaml and links plugins/, Flink writes log/, and the consumer
+  # moves the s3-fs-hadoop plugin from opt/ to plugins/ as this user.
+  - path: /opt/flink
+    type: permissions
+    permissions: 0o755
+    uid: 9999
+    gid: 9999
+    recursive: true
+
+environment:
+  FLINK_HOME: /opt/flink
+  # No Wolfi JRE package installs /usr/bin/java; see rev-rec-base.yaml. The
+  # leg-3 init Job runs `java` from PATH.
+  JAVA_HOME: /usr/lib/jvm/java-17-openjdk
+  PATH: /opt/flink/bin:/usr/lib/jvm/java-17-openjdk/bin:/usr/local/bin:/usr/bin:/bin
+  # Java 17 takes its default charset from the locale. flink:1.20.5-java17 set
+  # en_US.UTF-8; without LANG the JVM falls back to ASCII and writes `?` for
+  # every non-ASCII character it encodes without an explicit charset.
+  LANG: C.UTF-8
+
+archs:
+  - x86_64
+  - aarch64
+
+work-dir: /opt/flink
+
+entrypoint:
+  command: /docker-entrypoint.sh
+cmd: help
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.licenses: AGPL-3.0
+  org.opencontainers.image.description: Hardened Wolfi-based Flink 1.20 + JRE17 runtime image for infra/flink-paimon
