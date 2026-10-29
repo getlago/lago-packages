@@ -12,7 +12,7 @@ name: Build lago-metabase image
 #     rebuilds without editing METABASE_VERSION.
 #
 # Base auto-build note: the lago-metabase-base apko manifest is built
-# by build-bases.yaml (path filter on apko/**). That workflow pushes
+# by build-base.yaml, started by build-bases.yaml (path filter on apko/**). It pushes
 # `ghcr.io/getlago/lago-metabase-base:latest`, which this Dockerfile
 # consumes as its RUNTIME_IMAGE. Merging a change to the apko manifest
 # alone does NOT trigger this workflow — merge the base first, wait for
@@ -176,7 +176,7 @@ jobs:
           docker network rm mb-smoke >/dev/null 2>&1 || true
 
       - name: Stage .trivyignore
-        # Mirrors build-bases.yaml. The JAR carries library CVEs that only
+        # Mirrors build-base.yaml. The JAR carries library CVEs that only
         # an upstream Metabase release can fix, so this image needs the same
         # opt-in ignore file the apko manifests get. `touch` keeps the step
         # working if the file is ever deleted — Trivy's `trivyignores` input

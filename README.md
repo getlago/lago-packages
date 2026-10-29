@@ -55,7 +55,7 @@ All are multi-arch (`x86_64`, `aarch64`).
 
 ## Tags
 
-- `:<YYYYMMDD>-r<run>` — immutable, one per publish. Pin to this (or to the digest) for reproducible builds.
+- `:<YYYYMMDD>-r<run>` — immutable, one per publish. Pin to this (or to the digest) for reproducible builds. `<run>` is the `build-base.yaml` run number + 1000, which keeps it above the tags of the older matrix build.
 - `:<commit-sha>` — immutable: set only the first time a commit publishes.
 - `:latest` — the newest publish. Rebuilt daily so it stays within ~24h of upstream Wolfi.
 - `:<YYYYMMDD>-r<run>-<arch>`, `:latest-<arch>` — the per-arch images behind the tags above.
@@ -64,26 +64,121 @@ The daily rebuild is the point: Wolfi publishes CVE patches multiple times a day
 and `:latest` picks them up without anyone opening a PR.
 
 apko builds are reproducible, so a rebuild with the same apk set gives the same
-digest. A base is published only when its digest changes. The `notify` job
-then sends a `base-updated` `repository_dispatch` to `getlago/lago-deploy` and
-`getlago/lago-infrastructure`. There, `base-refresh plan`
-([lago-infrastructure `tools/base-refresh`](https://github.com/getlago/lago-infrastructure/tree/main/tools/base-refresh))
-rebuilds the deployed images on the new digests and bumps their GitOps tags.
+digest. A base is published only when its digest changes. The `notify` job of
+the batch then sends a `base-updated` `repository_dispatch` to the deploy
+repositories (the private repositories that hold the deployed tags). There, the
+base refresh rebuilds the deployed images on the new digests and bumps their
+GitOps tags: see [Base refresh](#base-refresh-for-consumers).
 
 The dispatch needs the `BASE_UPDATE_DISPATCH_TOKEN` secret (a token with
-`contents: write` on both repos). The consumers also run daily, so a missed
-dispatch only delays a refresh.
+`contents: write` on each deploy repository). The deploy repositories also run
+the refresh daily, so a missed dispatch only delays a refresh.
 
 ## Base refresh (for consumers)
 
 A new base fixes nothing until the images built on it are rebuilt and
-deployed. Three kinds of repository take part:
+deployed.
+
+### Flow
+
+Example: the `lago-api` image, on `lago-api-base` and `lago-api-build`.
+
+```mermaid
+flowchart TD
+  subgraph LP["getlago/lago-packages"]
+    PK["build-packages.yaml<br/>Build Wolfi packages"]
+    T1(["daily 07:00 UTC<br/>push to apko/**<br/>by hand"])
+    BB["build-bases.yaml<br/>Build apko base images<br/>(batch: picks the images)"]
+    BI["build-base.yaml<br/>one run per image, e.g. lago-api-base<br/>apko, Trivy, push ghcr.io/getlago/lago-api-base"]
+    PK -- "workflow_run" --> BB
+    T1 --> BB
+    BB -- "1 workflow_dispatch per image" --> BI
+    BI -- "change marker" --> BB
+  end
+  subgraph API["getlago/lago-api (open source)"]
+    REL["release.yml<br/>Dockerfile on :latest bases<br/>push getlago/api:vX"]
+  end
+  subgraph CO["deploy repository (private, holds the lago-api tag)"]
+    T2(["daily 09:30 UTC<br/>by hand"])
+    RB["refresh-bases.yaml<br/>calls base-refresh.yaml"]
+    PL["plan.sh<br/>pins not on the newest base"]
+    DI["dispatch.sh<br/>lago-api pin has a builder"]
+    BR["base-rebuild.yaml (builder)<br/>calls rebuild.yaml with the lago-api Dockerfile<br/>push &lt;sha&gt;-base.&lt;digest12&gt;"]
+    RF["refresh job<br/>Trivy, bump.sh, describe.sh"]
+    PR["PR base-refresh/api<br/>tag diff, base packages, fixed CVEs"]
+    T2 --> RB --> PL --> DI
+    RF --> PR
+  end
+  BI -. ":latest at release time" .-> REL
+  BB -- "base-updated, 1 per batch" --> RB
+  DI -- "workflow_dispatch, waits" --> BR
+  BR --> RF
+  PR -- "review, merge" --> GO["GitOps sync<br/>the clusters roll the pods"]
+```
+
+- A release of lago-api builds its `Dockerfile` on the `:latest` bases of that
+  day. Nothing in this repository starts it.
+- A deployed image stays on the base it was built on. The base refresh rebuilds
+  the **deployed commit** on the new base and opens a PR with the new tag.
+- An image that needs no secret has no `builder`: the deploy repository builds
+  it in its `build` job.
+- The lago-api build needs a secret (the Sidekiq Pro credential), so the deploy
+  repository is also its `builder`: its `base-rebuild.yaml` checks out the
+  deployed lago-api commit and calls `rebuild.yaml`.
+
+GitHub does not make links in a mermaid diagram clickable. Use this table:
+
+| Step | Runs | Source |
+| --- | --- | --- |
+| Build Wolfi packages | [runs](https://github.com/getlago/lago-packages/actions/workflows/build-packages.yaml) | [`build-packages.yaml`](.github/workflows/build-packages.yaml) |
+| Base batch | [runs](https://github.com/getlago/lago-packages/actions/workflows/build-bases.yaml) | [`build-bases.yaml`](.github/workflows/build-bases.yaml) |
+| One base image | [runs](https://github.com/getlago/lago-packages/actions/workflows/build-base.yaml) | [`build-base.yaml`](.github/workflows/build-base.yaml), [`apko/lago-api-base.yaml`](apko/lago-api-base.yaml) |
+| Base images | [packages](https://github.com/orgs/getlago/packages?repo_name=lago-packages) | [`apko/`](apko) |
+| lago-api release | [runs](https://github.com/getlago/lago-api/actions/workflows/release.yml) | [`Dockerfile`](https://github.com/getlago/lago-api/blob/main/Dockerfile), [`release.yml`](https://github.com/getlago/lago-api/blob/main/.github/workflows/release.yml) |
+| Refresh (deploy repository) | private | [`base-refresh.yaml`](.github/workflows/base-refresh.yaml), [scripts](.github/actions/base-refresh) |
+| Rebuild (builder) | in the builder repository | [`rebuild.yaml`](.github/workflows/rebuild.yaml) |
+
+A failed base image is a red `build-base.yaml` run named after the image. The
+batch run stays green and lists every image run in its summary. The other
+images still publish, and the batch still sends `base-updated`. The batch turns
+red only when it cannot start an image run.
+
+`base-updated` comes from the batch, once, for the images that changed while it
+waited. An image run sends its own when the batch does not cover it:
+
+- started by hand (`notify` defaults to true),
+- a re-run, for example of a red image after its fix,
+- it ended after the batch stopped waiting (110-minute deadline, or the batch
+  was cancelled).
+
+To rebuild one image, run `build-base.yaml` by hand with its `image` input.
+
+To trace a deployed tag `<release>-base.<digest12>`:
+
+1. Open its bump PR. The body has the base build, the refresh run, the base
+   packages that changed and the CVEs that the new base fixes.
+2. Without the PR: `<digest12>` is the start of the base index digest. The
+   index names the run that published it:
+
+   ```sh
+   for t in $(crane ls ghcr.io/getlago/<base> | grep -E '^[0-9]{8}-r[0-9]+$'); do
+     crane digest ghcr.io/getlago/<base>:$t | grep -q '^sha256:<digest12>' && echo "$t"
+   done
+   crane manifest ghcr.io/getlago/<base>:<that tag> | jq -r '.annotations["dev.getlago.build-run"]'
+   ```
+
+   A base published before the annotation existed has none. Its run number is
+   in the tag.
+
+### Repositories
+
+Three kinds of repository take part:
 
 | Repository | Does | Workflow |
 | --- | --- | --- |
 | lago-packages | publishes a base, sends `base-updated` | `build-bases.yaml` |
-| holds the tags (lago-infrastructure, lago-deploy) | plans, waits for the rebuild, scans it, opens the bump PR | calls `base-refresh.yaml` |
-| `builder` (lago-sidekiqs…) | rebuilds the **deployed commit** with its own secrets | `base-rebuild.yaml`, calls `rebuild.yaml` |
+| deploy repository (holds the tags) | plans, waits for the rebuild, scans it, opens the bump PR | calls `base-refresh.yaml` |
+| `builder` (e.g. lago-api) | rebuilds the **deployed commit** with its own secrets | `base-rebuild.yaml`, calls `rebuild.yaml` |
 
 The new tag is `<release>-base.<digest12>`. A pin with no `builder` is built
 by the repository that holds the tag, for an image that needs no secret.
@@ -245,8 +340,8 @@ rebuilding it on a timer would republish identical bytes.
 
 ### Key material
 
-The signing key is a `tls.PrivateKey` owned by the `packages` Pulumi project in
-`getlago/lago-infrastructure`. That project generates it, mirrors it to
+The signing key is a `tls.PrivateKey` owned by a Pulumi project in our private
+infrastructure repository. That project generates it, mirrors it to
 1Password, writes the private half to this repo as the `MELANGE_SIGNING_KEY`
 Actions secret, publishes the public half to `s3://lago-wolfi-packages/os/` for
 apko's keyring, and publishes the bucket role ARN here as `PACKAGES_ROLE_ARN`.
@@ -256,7 +351,10 @@ Nothing in this repo creates or rotates it.
 
 `build-packages.yaml` builds apks, `build-bases.yaml` builds images and chains
 off it. Inside `build-bases.yaml`, `discover` picks the manifests this event
-needs and `build` runs the matrix over them.
+needs, and `dispatch` starts one `build-base.yaml` run per manifest and waits
+for them. Each image has its own run, so a failure is easy to find and does not
+turn the other images red. To rebuild one image, run `build-base.yaml` by hand
+with its `image` input.
 
 `apko build` produces a local multi-arch OCI tarball, Trivy scans that tarball
 for fixable HIGH/CRITICAL CVEs, and only then does crane push the *exact* bytes

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Writes the new tags of one image (plan.sh JSON lines on stdin) into the
-# values files, then opens or updates its PR on base-refresh/<name>.
-# Needs yq, jq, gh (GH_TOKEN with contents + pull-requests write).
+# values files, then opens or updates its PR on base-refresh/<name>. The PR
+# body says what changed in the base and why (describe.sh).
+# Needs yq, jq, gh (GH_TOKEN with contents + pull-requests write), and crane
+# and trivy logged in to the registry.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -12,6 +14,7 @@ Only `RUNTIME_IMAGE` is set. The build stage uses the Dockerfile's default build
 
 MD
 
+pins=$(cat)
 while read -r pin; do
   name=$(jq -r .name <<<"$pin")
   file=$(jq -r .file <<<"$pin")
@@ -29,13 +32,32 @@ while read -r pin; do
   value=$(yq "$path" "$file")
   [[ ${value##*:} == "$new" ]] || { echo "$file: $path is not $new" >&2; exit 1; }
   echo "- \`$file\` \`$path\`: \`$old\` → \`$new\`" >>"$body"
-done
+done <<<"$pins"
 
 if git diff --quiet; then
   echo "No tag to change." >&2
   exit 0
 fi
-[[ -n ${RUN_URL:-} ]] && printf '\nRun: %s\n' "$RUN_URL" >>"$body"
+{
+  echo
+  describe.sh <<<"$pins"
+  echo
+  # The run that published each new base: build-base.yaml writes it on the
+  # base index. Older bases have no annotation: fall back to the run that sent
+  # base-updated (TRIGGER_URL), empty on a scheduled or manual refresh.
+  for base in $(jq -r .base <<<"$pins" | sort -u); do
+    run=$(crane manifest "$base" 2>/dev/null | jq -r '.annotations["dev.getlago.build-run"] // empty' 2>/dev/null || true)
+    run=${run:-${TRIGGER_URL:-}}
+    if [[ -n $run ]]; then echo "Base build (\`${base%@*}\`): $run"; fi
+  done
+  if [[ -n ${RUN_URL:-} ]]; then echo "Refresh run: $RUN_URL"; fi
+} >>"$body"
+# GitHub refuses a PR body over 65536 characters.
+if (( $(wc -c <"$body") > 60000 )); then
+  head -c 60000 "$body" >"$body.cut"
+  printf '\n\n… cut at 60000 characters.\n' >>"$body.cut"
+  mv "$body.cut" "$body"
+fi
 
 BRANCH=base-refresh/$name
 TITLE="chore($name): rebuild on the fresh lago-packages base"

@@ -1,7 +1,7 @@
 contents:
   repositories:
     - https://packages.wolfi.dev/os
-    # Lago's melange overlay, synced from S3 by build-bases.yaml. Carries a
+    # Lago's melange overlay, synced from S3 by build-base.yaml. Carries a
     # chromium newer than Wolfi's; apk resolves `chromium` below to whichever
     # repo has the higher version, so this self-heals once Wolfi catches up.
     - ./repo-local
