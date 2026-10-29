@@ -34,6 +34,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: nu {0}
+
 jobs:
   discover:
     # A failed package build publishes nothing, so there is no new apk to
@@ -49,10 +53,17 @@ jobs:
           # push: need two commits to diff the range. schedule/dispatch: shallow is fine.
           fetch-depth: ${{ github.event_name == 'push' && 2 || 1 }}
 
+      - uses: hustcer/setup-nu@v3.29
+        with:
+          version: "0.116.1"
+
       - name: Compute matrix
         id: set
+        env:
+          EVENT: ${{ github.event_name }}
+          IMAGE: ${{ inputs.image }}
+          BEFORE: ${{ github.event.before }}
         run: |
-          set -euo pipefail
           # Four triggers, four selection rules:
           #   push               — diff the push range and build only changed apko/*.yaml,
           #                        UNLESS build-bases.yaml itself changed (rebuild everything,
@@ -60,60 +71,43 @@ jobs:
           #   workflow_dispatch  — explicit `image` input wins; empty = all.
           #   workflow_run       — build-packages.yaml just published new apks, so rebuild
           #                        every manifest that opts into the overlay. They mark
-          #                        themselves by naming ./repo-local, the same grep the
-          #                        build job runs below.
+          #                        themselves by naming ./repo-local, the same check the
+          #                        build job runs.
           #   schedule           — daily CVE pickup, rebuild everything.
-          case "${{ github.event_name }}" in
-            workflow_dispatch)
-              if [ -n "${{ inputs.image }}" ]; then
-                files="apko/${{ inputs.image }}.yaml"
-                if [ ! -f "$files" ]; then
-                  echo "::error::apko/${{ inputs.image }}.yaml does not exist. Available:"
-                  ls apko/*.yaml
+          let all = ls apko/*.yaml | get name | sort
+          let files = match $env.EVENT {
+            'workflow_dispatch' => {
+              if ($env.IMAGE? | default '') == '' { $all } else {
+                let file = $"apko/($env.IMAGE).yaml"
+                if not ($file | path exists) {
+                  print $"::error::($file) does not exist. Available:"
+                  for f in $all { print $f }
                   exit 1
-                fi
-              else
-                files=$(ls apko/*.yaml)
-              fi
-              ;;
-            push)
-              BEFORE="${{ github.event.before }}"
+                }
+                [$file]
+              }
+            }
+            'push' => {
               # First-ever push to a new branch surfaces as all-zeroes; fall back
               # to a full rebuild rather than trying to diff against nothing.
-              if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-                files=$(ls apko/*.yaml)
-              else
-                CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}" -- apko .github/workflows/build-bases.yaml .github/workflows/build-base.yaml 2>/dev/null || true)
-                if echo "$CHANGED" | grep -qxE '\.github/workflows/build-bases?\.yaml'; then
+              if $env.BEFORE =~ '^0+$' { $all } else {
+                let changed = ^git diff --name-only $env.BEFORE $env.GITHUB_SHA -- apko .github/workflows/build-bases.yaml .github/workflows/build-base.yaml
+                  | complete | get stdout | lines
+                if ($changed | any {|f| $f =~ '^\.github/workflows/build-bases?\.yaml$' }) {
                   # Workflow-level change — rebuild all manifests so the fix lands uniformly.
-                  files=$(ls apko/*.yaml)
-                else
-                  files=$(echo "$CHANGED" | grep -E '^apko/.+\.yaml$' || true)
-                fi
-              fi
-              ;;
-            workflow_run)
-              files=$(grep -l 'repo-local' apko/*.yaml || true)
-              ;;
-            schedule|*)
-              files=$(ls apko/*.yaml)
-              ;;
-          esac
+                  $all
+                } else {
+                  $changed | where {|f| $f =~ '^apko/.+\.yaml$' }
+                }
+              }
+            }
+            'workflow_run' => { $all | where {|f| open --raw $f | str contains 'repo-local' } }
+            _ => { $all }
+          }
 
-          matrix="["
-          for f in $files; do
-            [ -n "$f" ] || continue
-            name=$(basename "$f" .yaml)
-            matrix+="{\"file\":\"$f\",\"repo\":\"$name\"},"
-          done
-          matrix="${matrix%,}]"
-          has_images="false"
-          [ "$matrix" != "[]" ] && has_images="true"
-          {
-            echo "matrix=$matrix"
-            echo "has-images=$has_images"
-          } >> $GITHUB_OUTPUT
-          echo "$matrix"
+          let matrix = $files | each {|f| {file: $f, repo: ($f | path parse | get stem)} } | to json -r
+          $"matrix=($matrix)\nhas-images=($files | is-not-empty)\n" | save -a $env.GITHUB_OUTPUT
+          print $matrix
 
   dispatch:
     needs: discover
@@ -133,30 +127,38 @@ jobs:
       # attempt before it.
       PARENT: ${{ github.run_id }}.${{ github.run_attempt }}
     steps:
+      - uses: hustcer/setup-nu@v3.29
+        with:
+          version: "0.116.1"
+
       - name: Start one run per image
         run: |
-          set -uo pipefail
           # A workflow_dispatch from GITHUB_TOKEN starts a run, unlike most
           # events. The image runs send no base-updated: this run sends one
           # for the batch. They build the commit `discover` read, not the tip
           # of the ref. A dispatch that fails 3 times is skipped, so the
           # images already started are still waited for and announced; the
           # last step fails this run for it.
-          : >started.txt
-          : >failed.txt
-          while read -r image; do
-            for try in 1 2 3; do
-              if gh workflow run build-base.yaml --ref "$GITHUB_REF_NAME" \
-                  -f image="$image" -f parent="$PARENT" -f notify=false -f sha="$GITHUB_SHA"; then
-                echo "$image" >>started.txt
-                echo "started $image"
-                continue 2
-              fi
-              sleep $((try * 10))
-            done
-            echo "::error title=$image::could not start its run"
-            echo "$image" >>failed.txt
-          done < <(jq -r '.[].repo' <<<"$MATRIX")
+          mut started = []
+          mut failed = []
+          for image in ($env.MATRIX | from json | get repo) {
+            mut ok = false
+            for try in 1..3 {
+              let r = ^gh workflow run build-base.yaml --ref $env.GITHUB_REF_NAME -f $"image=($image)" -f $"parent=($env.PARENT)" -f notify=false -f $"sha=($env.GITHUB_SHA)" | complete
+              if $r.exit_code == 0 { $ok = true; break }
+              print -e ($r.stderr | str trim)
+              sleep ($try * 10sec)
+            }
+            if $ok {
+              $started = $started | append $image
+              print $"started ($image)"
+            } else {
+              print $"::error title=($image)::could not start its run"
+              $failed = $failed | append $image
+            }
+          }
+          $started | to json | save -f started.json
+          $failed | to json | save -f failed.json
 
       - name: Wait for the image runs
         # Ends on its own at the deadline, before timeout-minutes, so the
@@ -166,60 +168,58 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 120
         run: |
-          set -uo pipefail
-          want=$(grep -c . started.txt)
-          deadline=$(( $(date +%s) + 110 * 60 ))
-          echo '[]' >runs.json
-          while :; do
-            if list=$(gh run list --workflow build-base.yaml --event workflow_dispatch --limit 200 \
-                --json databaseId,displayTitle,status,conclusion,url); then
-              jq --arg b " (batch $PARENT)" '[.[] | select(.displayTitle | endswith($b))]' <<<"$list" >runs.json
-              got=$(jq length runs.json)
-              open=$(jq '[.[] | select(.status != "completed")] | length' runs.json)
-              echo "$got/$want started, $open not finished"
-              [[ $got -ge $want && $open == 0 ]] && break
-            else
-              echo "::warning::gh run list failed, retrying"
-            fi
-            if (( $(date +%s) > deadline )); then
-              echo "::warning::image runs not finished after 110 minutes; summarizing what finished"
+          let want = open started.json | length
+          let deadline = (date now) + 110min
+          [] | to json | save -f runs.json
+          loop {
+            let list = ^gh run list --workflow build-base.yaml --event workflow_dispatch --limit 200 --json databaseId,displayTitle,status,conclusion,url | complete
+            if $list.exit_code == 0 {
+              let runs = $list.stdout | from json | where {|r| $r.displayTitle | str ends-with $" \(batch ($env.PARENT)\)" }
+              $runs | to json | save -f runs.json
+              let open = $runs | where status != 'completed' | length
+              print $"($runs | length)/($want) started, ($open) not finished"
+              if ($runs | length) >= $want and $open == 0 { break }
+            } else {
+              print "::warning::gh run list failed, retrying"
+            }
+            if (date now) > $deadline {
+              print "::warning::image runs not finished after 110 minutes; summarizing what finished"
               break
-            fi
-            sleep 30
-          done
+            }
+            sleep 30sec
+          }
 
       - name: Summarize and collect the change markers
         id: summary
         # Also after a failed wait: published images must still be announced.
         if: ${{ !cancelled() }}
         run: |
-          set -uo pipefail
           # A failed image does not fail this run: its own run is red.
-          {
-            echo "| Image | Result | Published |"
-            echo "| --- | --- | --- |"
-          } >>"$GITHUB_STEP_SUMMARY"
-          changed=false
-          while read -r run; do
-            id=$(jq -r .databaseId <<<"$run") url=$(jq -r .url <<<"$run")
-            result=$(jq -r '.conclusion // "" | if . == "" then "not finished" else . end' <<<"$run")
-            image=$(jq -r '.displayTitle | sub(" \\(batch .*$"; "")' <<<"$run")
-            published=no
-            if [[ $result == success ]] && gh run download "$id" -n "changed-$image" -D "changed/$image" 2>/dev/null; then
-              published=yes changed=true
-            fi
-            [[ $result == success ]] || echo "::warning title=$image::$result: $url"
-            echo "| \`$image\` | [$result]($url) | $published |" >>"$GITHUB_STEP_SUMMARY"
-          done < <(jq -c 'sort_by(.displayTitle) | .[]' runs.json 2>/dev/null)
-          echo "changed=$changed" >>"$GITHUB_OUTPUT"
+          let runs = if ('runs.json' | path exists) { open runs.json } else { [] }
+          mut rows = ['| Image | Result | Published |' '| --- | --- | --- |']
+          mut changed = false
+          for run in ($runs | sort-by displayTitle) {
+            let result = if ($run.conclusion | default '') == '' { 'not finished' } else { $run.conclusion }
+            let image = $run.displayTitle | str replace -r ' \(batch .*$' ''
+            mut published = 'no'
+            if $result == 'success' and (^gh run download ($run.databaseId | into string) -n $"changed-($image)" -D $"changed/($image)" | complete).exit_code == 0 {
+              $published = 'yes'
+              $changed = true
+            }
+            if $result != 'success' { print $"::warning title=($image)::($result): ($run.url)" }
+            $rows = $rows | append $"| `($image)` | [($result)]\(($run.url)\) | ($published) |"
+          }
+          ($rows | str join "\n") + "\n" | save -a $env.GITHUB_STEP_SUMMARY
+          $"changed=($changed)\n" | save -a $env.GITHUB_OUTPUT
 
       - name: Fail on images that never started
         if: ${{ !cancelled() }}
         run: |
-          if [[ -s failed.txt ]]; then
-            echo "::error::no run started for: $(paste -sd' ' failed.txt)"
+          let failed = if ('failed.json' | path exists) { open failed.json } else { [] }
+          if ($failed | is-not-empty) {
+            print $"::error::no run started for: ($failed | str join ' ')"
             exit 1
-          fi
+          }
 
   notify:
     # Tells the consumers a base moved; their `base-refresh plan` reads the

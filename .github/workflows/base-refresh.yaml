@@ -5,11 +5,11 @@ name: Base refresh
 # calling repository: the one that holds the tags (lago-infrastructure,
 # lago-deploy). Pins format: see README.md.
 #
-# plan.sh lists the stale pins. A pin with a `builder` is rebuilt by that
+# plan.nu lists the stale pins. A pin with a `builder` is rebuilt by that
 # repository (its base-rebuild.yaml calls rebuild.yaml, with its own secrets
-# and registry access): dispatch.sh starts it and waits. A pin without one is
-# built here, for an image that needs no secret. bump.sh opens the PR, with
-# the base package changes and the fixed CVEs (describe.sh) in its body.
+# and registry access): dispatch.nu starts it and waits. A pin without one is
+# built here, for an image that needs no secret. bump.nu opens the PR, with
+# the base package changes and the fixed CVEs (describe.nu) in its body.
 on:
   workflow_call:
     inputs:
@@ -42,6 +42,10 @@ permissions:
   contents: read
   id-token: write
 
+defaults:
+  run:
+    shell: nu {0}
+
 env:
   AWS_REGION: us-east-1
 
@@ -54,18 +58,21 @@ jobs:
     outputs:
       sha: ${{ steps.sha.outputs.sha }}
     steps:
+      - uses: hustcer/setup-nu@v3.29
+        with:
+          version: "0.116.1"
       - id: sha
         run: |
-          jwt=$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=lago-packages-base-refresh" | jq -r .value)
-          claims=$(cut -d. -f2 <<<"$jwt" | tr '_-' '/+')
-          claims=$(printf '%s%s' "$claims" "$(printf '%*s' $(( (4 - ${#claims} % 4) % 4 )) '' | tr ' ' =)" | base64 -d)
-          ref=$(jq -r .job_workflow_ref <<<"$claims")
-          sha=$(jq -r .job_workflow_sha <<<"$claims")
-          [[ $ref == getlago/lago-packages/.github/workflows/base-refresh.yaml@* && $sha =~ ^[0-9a-f]{40}$ ]] ||
-            { echo "::error::unexpected job_workflow_ref $ref"; exit 1; }
-          echo "sha=$sha" >>"$GITHUB_OUTPUT"
-          echo "scripts at getlago/lago-packages@$sha" >&2
+          let token = http get -H {Authorization: $"bearer ($env.ACTIONS_ID_TOKEN_REQUEST_TOKEN)"} $"($env.ACTIONS_ID_TOKEN_REQUEST_URL)&audience=lago-packages-base-refresh"
+          let claims = $token.value | split row '.' | get 1 | decode base64 --url --nopad | decode | from json
+          let ref = $claims.job_workflow_ref
+          let sha = $claims.job_workflow_sha
+          if not (($ref | str starts-with 'getlago/lago-packages/.github/workflows/base-refresh.yaml@') and $sha =~ '^[0-9a-f]{40}$') {
+            print $"::error::unexpected job_workflow_ref ($ref)"
+            exit 1
+          }
+          $"sha=($sha)\n" | save -a $env.GITHUB_OUTPUT
+          print -e $"scripts at getlago/lago-packages@($sha)"
 
   plan:
     needs: scripts
@@ -77,8 +84,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # plan.sh reads build.json at the deployed commit.
+          # plan.nu reads build.json at the deployed commit.
           fetch-depth: 0
+      - uses: hustcer/setup-nu@v3.29
+        with:
+          version: "0.116.1"
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ inputs.ecr-role }}
@@ -93,20 +103,26 @@ jobs:
           ref: ${{ needs.scripts.outputs.sha }}
           path: .base-refresh
           sparse-checkout: .github/actions/base-refresh
-      - run: echo "$GITHUB_WORKSPACE/.base-refresh/.github/actions/base-refresh" >>"$GITHUB_PATH"
+      - run: |
+          $"($env.GITHUB_WORKSPACE)/.base-refresh/.github/actions/base-refresh\n" | save -a $env.GITHUB_PATH
       - id: plan
         env:
           PINS: ${{ inputs.pins }}
           ECR: ${{ inputs.ecr }}
           GH_TOKEN: ${{ secrets.pr-token }}
         run: |
-          plan.sh >pins.jsonl
+          let pins = ^plan.nu | from json --objects
           # One refresh job per image, so its pins land in one PR. One build
           # per tag: pins of one image on one commit share it.
-          echo "pins=$(jq -sc 'group_by(.name)' pins.jsonl)" >>"$GITHUB_OUTPUT"
-          todo='map(select(.built | not)) | unique_by([.repository, .tag])'
-          echo "builds=$(jq -sc "$todo | map(select(.builder | not))" pins.jsonl)" >>"$GITHUB_OUTPUT"
-          echo "dispatches=$(jq -sc "$todo | map(select(.builder))" pins.jsonl)" >>"$GITHUB_OUTPUT"
+          let todo = $pins | where built == false | uniq-by repository tag
+          let groups = $pins | sort-by name | group-by name | values
+          let builds = $todo | where {|p| ($p.builder? | default '') == '' }
+          let dispatches = $todo | where {|p| ($p.builder? | default '') != '' }
+          [
+            $"pins=($groups | to json -r)"
+            $"builds=($builds | to json -r)"
+            $"dispatches=($dispatches | to json -r)"
+          ] | str join "\n" | $in + "\n" | save -a $env.GITHUB_OUTPUT
 
   build:
     needs: plan
@@ -147,18 +163,22 @@ jobs:
       matrix:
         pin: ${{ fromJson(needs.plan.outputs.dispatches) }}
     steps:
+      - uses: hustcer/setup-nu@v3.29
+        with:
+          version: "0.116.1"
       - uses: actions/checkout@v7
         with:
           repository: getlago/lago-packages
           ref: ${{ needs.scripts.outputs.sha }}
           path: .base-refresh
           sparse-checkout: .github/actions/base-refresh
-      - run: echo "$GITHUB_WORKSPACE/.base-refresh/.github/actions/base-refresh" >>"$GITHUB_PATH"
+      - run: |
+          $"($env.GITHUB_WORKSPACE)/.base-refresh/.github/actions/base-refresh\n" | save -a $env.GITHUB_PATH
       - env:
           PIN: ${{ toJson(matrix.pin) }}
           GH_TOKEN: ${{ secrets.pr-token }}
           NONCE: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: dispatch.sh
+        run: ^dispatch.nu
 
   # One job per image, also when a build failed: a failed image has no tag,
   # so only its own job fails.
@@ -182,7 +202,10 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
       - uses: aws-actions/amazon-ecr-login@v2
       - uses: aquasecurity/setup-trivy@v0.3.1
-      # describe.sh reads the base layers of the old and new image.
+      - uses: hustcer/setup-nu@v3.29
+        with:
+          version: "0.116.1"
+      # describe.nu reads the base layers of the old and new image.
       - uses: imjasonh/setup-crane@v0.7
         with:
           version: v0.20.2
@@ -192,20 +215,21 @@ jobs:
         env:
           PINS: ${{ toJson(matrix.pins) }}
         run: |
-          jq -r '.[] | "\(.repository):\(.tag)"' <<<"$PINS" | sort -u | while read -r image; do
-            trivy image --severity HIGH,CRITICAL --ignore-unfixed --pkg-types os --exit-code 1 "$image"
-          done
+          for image in ($env.PINS | from json | each {|p| $"($p.repository):($p.tag)" } | uniq | sort) {
+            ^trivy image --severity HIGH,CRITICAL --ignore-unfixed --pkg-types os --exit-code 1 $image
+          }
       - uses: actions/checkout@v7
         with:
           repository: getlago/lago-packages
           ref: ${{ needs.scripts.outputs.sha }}
           path: .base-refresh
           sparse-checkout: .github/actions/base-refresh
-      - run: echo "$GITHUB_WORKSPACE/.base-refresh/.github/actions/base-refresh" >>"$GITHUB_PATH"
       - run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          jq -c '.[]' <<<"$PINS" | bump.sh
+          $"($env.GITHUB_WORKSPACE)/.base-refresh/.github/actions/base-refresh\n" | save -a $env.GITHUB_PATH
+      - run: |
+          ^git config user.name "github-actions[bot]"
+          ^git config user.email "github-actions[bot]@users.noreply.github.com"
+          $env.PINS | from json | each { to json -r } | str join "\n" | ^bump.nu
         env:
           PINS: ${{ toJson(matrix.pins) }}
           GH_TOKEN: ${{ secrets.pr-token }}

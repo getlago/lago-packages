@@ -1,0 +1,21 @@
+name: Test base refresh
+
+# Runs the unit tests of the base-refresh scripts.
+on:
+  pull_request:
+    paths:
+      - .github/actions/base-refresh/**
+      - .github/workflows/test-base-refresh.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hustcer/setup-nu@v3.29
+        with:
+          version: "0.116.1"
+      - run: nu .github/actions/base-refresh/test.nu
