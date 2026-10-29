@@ -11,8 +11,8 @@ contents:
     - build-base
     - git
     - curl
-    # Go 1.26 to match upstream gotenberg's GOLANG_VERSION.
-    - go-1.26
+    # Go 1.27 to match upstream gotenberg's GOLANG_VERSION.
+    - go-1.27
 
 environment:
   PATH: /usr/local/bin:/usr/bin:/bin
@@ -24,4 +24,4 @@ archs:
 
 annotations:
   org.opencontainers.image.source: https://github.com/getlago/lago-packages
-  org.opencontainers.image.description: Wolfi-based builder image for gotenberg (go-1.26 + build-base + git)
+  org.opencontainers.image.description: Wolfi-based builder image for gotenberg (go-1.27 + build-base + git)
