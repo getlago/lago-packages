@@ -11,7 +11,7 @@
 contents:
   repositories:
     - https://packages.wolfi.dev/os
-    # Lago's melange overlay, synced from S3 by build-bases.yaml.
+    # Lago's melange overlay, synced from S3 by build-base.yaml.
     - ./repo-local
   keyring:
     - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub

@@ -58,6 +58,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.SRC_SHA }}
+          fetch-depth: 0
+
+      # The publish is signed as this workflow on the dispatched ref, so only
+      # build commits that ref already holds.
+      - name: Check the commit is on the ref
+        run: |
+          if ! git merge-base --is-ancestor "$SRC_SHA" "$GITHUB_SHA"; then
+            echo "::error::$SRC_SHA is not on $GITHUB_REF_NAME ($GITHUB_SHA)"
+            exit 1
+          fi
 
       - name: Check the manifest exists
         run: |

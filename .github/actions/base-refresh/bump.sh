@@ -46,7 +46,7 @@ fi
   # base index. Older bases have no annotation: fall back to the run that sent
   # base-updated (TRIGGER_URL), empty on a scheduled or manual refresh.
   for base in $(jq -r .base <<<"$pins" | sort -u); do
-    run=$(crane manifest "$base" 2>/dev/null | jq -r '.annotations["dev.getlago.build-run"] // empty')
+    run=$(crane manifest "$base" 2>/dev/null | jq -r '.annotations["dev.getlago.build-run"] // empty' 2>/dev/null || true)
     run=${run:-${TRIGGER_URL:-}}
     if [[ -n $run ]]; then echo "Base build (\`${base%@*}\`): $run"; fi
   done

@@ -85,6 +85,8 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
       - uses: aws-actions/amazon-ecr-login@v2
       - uses: imjasonh/setup-crane@v0.7
+        with:
+          version: v0.20.2
       - uses: actions/checkout@v7
         with:
           repository: getlago/lago-packages
@@ -182,6 +184,8 @@ jobs:
       - uses: aquasecurity/setup-trivy@v0.3.1
       # describe.sh reads the base layers of the old and new image.
       - uses: imjasonh/setup-crane@v0.7
+        with:
+          version: v0.20.2
       # Every run, also when an earlier run built the tag. OS packages only:
       # that is what a base refresh changes. A missing tag fails here.
       - name: Trivy (OS packages)
