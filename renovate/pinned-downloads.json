@@ -1,0 +1,35 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Keep Dockerfile downloads pinned by version + sha256 up to date. Annotate each pin as `# renovate: datasource=<datasource> depName=<package>`, then `# sha256: <URL with ${VERSION}>`, then `ARG <NAME>_VERSION=<version>`, with `ARG <NAME>_SHA256=<hex>` below. Renovate moves the version; the .github/actions/pinned-downloads action recomputes the sha256 on the PR. Add `custom.regex` to enabledManagers if the repository sets them.",
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Annotated ARG <NAME>_VERSION pins in Dockerfiles.",
+      "managerFilePatterns": [
+        "/(^|/)Dockerfile[^/]*$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?\\n(?:#.*\\n)*ARG \\w+_VERSION=(?<currentValue>\\S+)"
+      ]
+    }
+  ],
+  "gitIgnoredAuthors": [
+    "41898282+github-actions[bot]@users.noreply.github.com"
+  ],
+  "packageRules": [
+    {
+      "description": "Pinned downloads: wait 3 days after a release (a pulled or re-tagged release does not reach us), one PR per repository.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "minimumReleaseAge": "3 days",
+      "groupName": "pinned downloads",
+      "groupSlug": "pinned-downloads",
+      "semanticCommitType": "chore",
+      "semanticCommitScope": "deps",
+      "addLabels": [
+        "pinned downloads"
+      ]
+    }
+  ]
+}

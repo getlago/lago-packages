@@ -1,0 +1,41 @@
+name: Rehash pinned downloads
+description: >-
+  On a Renovate PR, recompute the ARG <NAME>_SHA256 of each pinned download
+  whose ARG <NAME>_VERSION changed, and push the fix to the PR branch.
+  Pairs with renovate/pinned-downloads.json. See rehash.sh for the format.
+
+inputs:
+  dockerfiles:
+    description: Dockerfiles to rehash, space separated.
+    default: Dockerfile
+  base-ref:
+    description: Ref the versions are compared with.
+    default: ${{ github.base_ref }}
+
+outputs:
+  pushed:
+    description: '"true" when a commit was pushed.'
+    value: ${{ steps.rehash.outputs.pushed }}
+
+runs:
+  using: composite
+  steps:
+    - id: rehash
+      shell: bash
+      env:
+        BASE_REF: origin/${{ inputs.base-ref }}
+        FILES: ${{ inputs.dockerfiles }}
+      run: |
+        set -euo pipefail
+        git fetch -q --depth=1 origin "+refs/heads/${BASE_REF#origin/}:refs/remotes/$BASE_REF"
+        read -ra files <<<"$FILES"
+        "$GITHUB_ACTION_PATH/rehash.sh" "${files[@]}"
+        if git diff --quiet; then
+          echo pushed=false >>"$GITHUB_OUTPUT"
+          exit 0
+        fi
+        git config user.name 'github-actions[bot]'
+        git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+        git commit -qam 'chore(deps): rehash pinned downloads'
+        git push -q origin "HEAD:$GITHUB_HEAD_REF"
+        echo pushed=true >>"$GITHUB_OUTPUT"
