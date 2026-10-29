@@ -260,6 +260,28 @@ cannot inject build args or push a release tag. `base-refresh.yaml` checks out
 its scripts at its own commit (the `job_workflow_sha` OIDC claim), so pinning
 the workflow by SHA also pins the scripts.
 
+## Pinned downloads (Renovate)
+
+A Dockerfile that downloads a release pins it by version and sha256. Annotate
+each pin so Renovate can move it:
+
+```dockerfile
+# renovate: datasource=github-releases depName=gotenberg/gotenberg
+# sha256: https://github.com/gotenberg/gotenberg/archive/refs/tags/${VERSION}.tar.gz
+ARG GOTENBERG_VERSION=v8.39.0
+ARG GOTENBERG_SHA256=11b3ec38...
+```
+
+1. Extend `github>getlago/lago-packages//renovate/pinned-downloads` (add
+   `custom.regex` to `enabledManagers` if the repository sets them).
+   Renovate opens one `renovate/pinned-downloads` PR, 3 days after a release.
+2. On that PR, run the `.github/actions/pinned-downloads` action (pinned by
+   SHA). It recomputes each `*_SHA256` whose `*_VERSION` changed and pushes
+   the fix. The PR's build then verifies the bytes. An unchanged version
+   keeps its hash, so bytes that move under a tag fail the build.
+
+Example: getlago/lago-gotenberg `.github/workflows/pr.yaml`.
+
 ## Verifying
 
 ```sh
