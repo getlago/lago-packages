@@ -41,6 +41,10 @@ concurrency:
   group: base-${{ inputs.image }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    shell: nu {0}
+
 env:
   REGISTRY: ghcr.io/getlago
   AWS_REGION: us-east-1
@@ -60,22 +64,26 @@ jobs:
           ref: ${{ env.SRC_SHA }}
           fetch-depth: 0
 
+      - uses: hustcer/setup-nu@v3.29
+        with:
+          version: "0.116.1"
+
       # The publish is signed as this workflow on the dispatched ref, so only
       # build commits that ref already holds.
       - name: Check the commit is on the ref
         run: |
-          if ! git merge-base --is-ancestor "$SRC_SHA" "$GITHUB_SHA"; then
-            echo "::error::$SRC_SHA is not on $GITHUB_REF_NAME ($GITHUB_SHA)"
+          if (^git merge-base --is-ancestor $env.SRC_SHA $env.GITHUB_SHA | complete).exit_code != 0 {
+            print $"::error::($env.SRC_SHA) is not on ($env.GITHUB_REF_NAME) \(($env.GITHUB_SHA)\)"
             exit 1
-          fi
+          }
 
       - name: Check the manifest exists
         run: |
-          if [ ! -f "$FILE" ]; then
-            echo "::error::$FILE does not exist. Available:"
-            ls apko/*.yaml
+          if not ($env.FILE | path exists) {
+            print $"::error::($env.FILE) does not exist. Available:"
+            for f in (ls apko/*.yaml | get name) { print $f }
             exit 1
-          fi
+          }
 
       - name: Install apko
         # Pin the release AND its sha256 — chainguard-dev/actions doesn't
@@ -87,21 +95,24 @@ jobs:
           APKO_VERSION: v1.4.1
           APKO_SHA256: d72352a2a875440946c05877a2e20eb4ffe6ab785cea8e5dbea942f1d62fd42e
         run: |
-          set -euo pipefail
-          workdir=$(mktemp -d)
-          asset=apko_${APKO_VERSION#v}_linux_amd64.tar.gz
-          curl -sSfL -o "$workdir/$asset" \
-            "https://github.com/chainguard-dev/apko/releases/download/${APKO_VERSION}/${asset}"
-          echo "${APKO_SHA256}  $workdir/$asset" | sha256sum -c -
-          tar xz -C "$workdir" -f "$workdir/$asset"
-          bin=$(find "$workdir" -type f -name apko -perm -u+x | head -1)
-          if [ -z "$bin" ]; then
-            echo "::error::apko binary not found in tarball; contents:"
-            find "$workdir" -maxdepth 3
+          let workdir = mktemp -d
+          let asset = $"apko_($env.APKO_VERSION | str trim -l -c 'v')_linux_amd64.tar.gz"
+          let tarball = $"($workdir)/($asset)"
+          ^curl -sSfL -o $tarball $"https://github.com/chainguard-dev/apko/releases/download/($env.APKO_VERSION)/($asset)"
+          let sum = open --raw $tarball | hash sha256
+          if $sum != $env.APKO_SHA256 {
+            print $"::error::($asset): sha256 ($sum), expected ($env.APKO_SHA256)"
             exit 1
-          fi
-          sudo mv "$bin" /usr/local/bin/apko
-          apko version
+          }
+          ^tar xz -C $workdir -f $tarball
+          let bin = glob $"($workdir)/**/apko" | where {|f| ($f | path type) == 'file' } | get -o 0
+          if $bin == null {
+            print "::error::apko binary not found in tarball; contents:"
+            ^find $workdir -maxdepth 3
+            exit 1
+          }
+          ^sudo mv $bin /usr/local/bin/apko
+          ^apko version
 
       - name: Does this manifest use the Lago overlay?
         # Manifests opt in by referencing ./repo-local. Everything else skips the
@@ -109,12 +120,7 @@ jobs:
         # nothing for this.
         id: overlay
         run: |
-          set -euo pipefail
-          if grep -q 'repo-local' "${{ env.FILE }}"; then
-            echo "needed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "needed=false" >> "$GITHUB_OUTPUT"
-          fi
+          $"needed=(open --raw $env.FILE | str contains 'repo-local')\n" | save -a $env.GITHUB_OUTPUT
 
       - name: Assume the packages role
         if: steps.overlay.outputs.needed == 'true'
@@ -129,26 +135,27 @@ jobs:
       - name: Sync the Lago overlay
         if: steps.overlay.outputs.needed == 'true'
         run: |
-          set -euo pipefail
           # apk resolves <repo>/<arch>/APKINDEX.tar.gz, which is the layout the
           # bucket already has. The allowlist below is deliberate: apk installs
           # the highest version it can see, so an overlay apk no manifest asks
           # for is either inert (older than Wolfi's) or a silent shadow of
           # Wolfi's (newer). Add an --include line only for a package a manifest
           # really installs from the overlay.
-          aws s3 sync "s3://${PACKAGES_BUCKET}/os/" ./repo-local/ \
-            --exclude "*" \
-            --include "*/APKINDEX.tar.gz" \
-            --include "lago-signing.rsa.pub" \
-            --include "*/chromium-*.apk" \
-            --include "*/flink-1.20-*.apk"
+          (^aws s3 sync $"s3://($env.PACKAGES_BUCKET)/os/" ./repo-local/
+            --exclude "*"
+            --include "*/APKINDEX.tar.gz"
+            --include "lago-signing.rsa.pub"
+            --include "*/chromium-*.apk"
+            --include "*/flink-1.20-*.apk")
           # Fail loudly rather than silently falling back to Wolfi's older
           # package, which would reintroduce the CVEs this overlay exists to fix.
-          test -f ./repo-local/lago-signing.rsa.pub
-          for arch in x86_64 aarch64; do
-            test -f "./repo-local/$arch/APKINDEX.tar.gz"
-          done
-          du -sh ./repo-local
+          for f in [./repo-local/lago-signing.rsa.pub ./repo-local/x86_64/APKINDEX.tar.gz ./repo-local/aarch64/APKINDEX.tar.gz] {
+            if not ($f | path exists) {
+              print $"::error::($f) is missing from the overlay"
+              exit 1
+            }
+          }
+          ^du -sh ./repo-local
 
       - name: Build apko base (${{ env.IMAGE_NAME }}) — one OCI tarball per arch
         # One tarball per arch, not a single `--arch x86_64,aarch64` build:
@@ -157,18 +164,14 @@ jobs:
         # per arch keeps the scan gate on the exact bytes that get pushed —
         # the multi-arch index is assembled from these two below.
         run: |
-          for arch in x86_64 aarch64; do
-            apko build \
-              --arch "$arch" \
-              ${{ env.FILE }} \
-              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.SRC_SHA }} \
-              "image-$arch.tar"
+          for arch in [x86_64 aarch64] {
+            ^apko build --arch $arch $env.FILE $"($env.REGISTRY)/($env.IMAGE_NAME):($env.SRC_SHA)" $"image-($arch).tar"
             # apko writes sbom-<arch>.spdx.json next to the tarball on every
             # build. Keep it under a per-arch name so the second pass cannot
             # clobber the first, and so the attest step below can find it.
-            mv "sbom-$arch.spdx.json" "sbom-${{ env.IMAGE_NAME }}-$arch.spdx.json"
-          done
-          ls -la sbom-*.spdx.json
+            mv $"sbom-($arch).spdx.json" $"sbom-($env.IMAGE_NAME)-($arch).spdx.json"
+          }
+          ls sbom-*.spdx.json | select name size | print
 
       - name: Stage per-manifest .trivyignore
         # Every manifest can carry its own `.trivyignore.d/<name>` file for
@@ -180,8 +183,8 @@ jobs:
         # any file are harmless (Trivy silently ignores non-matching IDs)
         # and should be pruned on the next clean daily rebuild.
         run: |
-          mkdir -p .trivyignore.d
-          touch ".trivyignore.d/${{ env.IMAGE_NAME }}"
+          mkdir .trivyignore.d
+          touch $".trivyignore.d/($env.IMAGE_NAME)"
 
       - name: Scan x86_64 tarball for HIGH/CRITICAL CVEs (Trivy)
         # Scans the local OCI archive directly, before it ever reaches
@@ -237,19 +240,18 @@ jobs:
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
-          set -euo pipefail
-          changed=false
-          for pair in x86_64:amd64 aarch64:arm64; do
-            arch=${pair%%:*} platform=${pair##*:}
-            built=$(crane digest --tarball "image-$arch.tar")
-            published=$(crane digest --platform "linux/$platform" "$IMAGE:latest" 2>/dev/null || echo none)
-            echo "$arch: built=$built published=$published"
-            [ "$built" = "$published" ] || changed=true
-          done
-          echo "changed=$changed" >> "$GITHUB_OUTPUT"
-          if [ "$changed" = false ]; then
-            echo "::notice::${{ env.IMAGE_NAME }} is unchanged, nothing to publish"
-          fi
+          mut changed = false
+          for p in [[arch platform]; [x86_64 amd64] [aarch64 arm64]] {
+            let built = ^crane digest --tarball $"image-($p.arch).tar" | str trim
+            let latest = ^crane digest --platform $"linux/($p.platform)" $"($env.IMAGE):latest" | complete
+            let published = if $latest.exit_code == 0 { $latest.stdout | str trim } else { 'none' }
+            print $"($p.arch): built=($built) published=($published)"
+            if $built != $published { $changed = true }
+          }
+          $"changed=($changed)\n" | save -a $env.GITHUB_OUTPUT
+          if not $changed {
+            print $"::notice::($env.IMAGE_NAME) is unchanged, nothing to publish"
+          }
 
       - name: Push scan-clean per-arch images to GHCR
         # crane pushes the exact tarballs Trivy scanned — no rebuild, no
@@ -261,16 +263,15 @@ jobs:
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
-          set -euo pipefail
           # Immutable and sortable; `:<sha>` repeats on daily runs. +1000: this
           # workflow counts from 1, and the tags of the matrix build it
           # replaced reached r7x. The offset keeps every new tag above them.
-          tag="$(date -u +%Y%m%d)-r$((GITHUB_RUN_NUMBER + 1000))"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          for arch in x86_64 aarch64; do
-            crane push "image-$arch.tar" "$IMAGE:$tag-$arch"
-            crane tag "$IMAGE:$tag-$arch" "latest-$arch"
-          done
+          let tag = $"(date now | date to-timezone UTC | format date '%Y%m%d')-r(($env.GITHUB_RUN_NUMBER | into int) + 1000)"
+          $"tag=($tag)\n" | save -a $env.GITHUB_OUTPUT
+          for arch in [x86_64 aarch64] {
+            ^crane push $"image-($arch).tar" $"($env.IMAGE):($tag)-($arch)"
+            ^crane tag $"($env.IMAGE):($tag)-($arch)" $"latest-($arch)"
+          }
 
       - name: Assemble multi-arch index
         # `:<sha>` is set only on a commit's first publish, so it never moves.
@@ -280,18 +281,17 @@ jobs:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           TAG: ${{ steps.push.outputs.tag }}
         run: |
-          set -euo pipefail
-          tags=(-t "$IMAGE:$TAG" -t "$IMAGE:latest")
-          if crane digest "$IMAGE:${{ env.SRC_SHA }}" >/dev/null 2>&1; then
-            echo "$IMAGE:${{ env.SRC_SHA }} exists, leaving it in place"
-          else
-            tags+=(-t "$IMAGE:${{ env.SRC_SHA }}")
-          fi
+          mut tags = ['-t' $"($env.IMAGE):($env.TAG)" '-t' $"($env.IMAGE):latest"]
+          if (^crane digest $"($env.IMAGE):($env.SRC_SHA)" | complete).exit_code == 0 {
+            print $"($env.IMAGE):($env.SRC_SHA) exists, leaving it in place"
+          } else {
+            $tags = $tags ++ ['-t' $"($env.IMAGE):($env.SRC_SHA)"]
+          }
           # The annotation links the index to this run: bump PRs read it.
-          docker buildx imagetools create "${tags[@]}" \
-            --annotation "index:dev.getlago.build-run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            "$IMAGE:$TAG-x86_64" "$IMAGE:$TAG-aarch64"
-          echo "digest=$(crane digest "$IMAGE:$TAG")" >> "$GITHUB_OUTPUT"
+          (^docker buildx imagetools create ...$tags
+            --annotation $"index:dev.getlago.build-run=($env.GITHUB_SERVER_URL)/($env.GITHUB_REPOSITORY)/actions/runs/($env.GITHUB_RUN_ID)"
+            $"($env.IMAGE):($env.TAG)-x86_64" $"($env.IMAGE):($env.TAG)-aarch64")
+          $"digest=(^crane digest $'($env.IMAGE):($env.TAG)' | str trim)\n" | save -a $env.GITHUB_OUTPUT
 
       - name: Install cosign
         if: steps.diff.outputs.changed == 'true'
@@ -304,8 +304,9 @@ jobs:
         if: steps.diff.outputs.changed == 'true'
         env:
           COSIGN_YES: "true"
+          DIGEST: ${{ steps.index.outputs.digest }}
         run: |
-          cosign sign "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.index.outputs.digest }}"
+          ^cosign sign $"($env.REGISTRY)/($env.IMAGE_NAME)@($env.DIGEST)"
 
       - name: Attach the SBOMs as cosign attestations
         # Per-arch: that is the digest a puller resolves to.
@@ -317,14 +318,11 @@ jobs:
         if: steps.diff.outputs.changed == 'true'
         env:
           COSIGN_YES: "true"
+          TAG: ${{ steps.push.outputs.tag }}
         run: |
-          set -euo pipefail
-          for arch in x86_64 aarch64; do
-            cosign attest \
-              --predicate "sbom-${{ env.IMAGE_NAME }}-$arch.spdx.json" \
-              --type spdxjson \
-              "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.push.outputs.tag }}-$arch"
-          done
+          for arch in [x86_64 aarch64] {
+            ^cosign attest --predicate $"sbom-($env.IMAGE_NAME)-($arch).spdx.json" --type spdxjson $"($env.REGISTRY)/($env.IMAGE_NAME):($env.TAG)-($arch)"
+          }
 
       - name: Upload the SBOMs as build artifacts
         # Same bytes as the attestation, reachable without cosign — useful when
@@ -340,7 +338,9 @@ jobs:
         # build-bases.yaml cannot read this run's outputs: it downloads this
         # marker to decide if the batch sends base-updated.
         if: steps.diff.outputs.changed == 'true'
-        run: mkdir -p changed && touch "changed/${{ env.IMAGE_NAME }}"
+        run: |
+          mkdir changed
+          touch $"changed/($env.IMAGE_NAME)"
 
       - name: Upload the change marker
         if: steps.diff.outputs.changed == 'true'
@@ -367,6 +367,10 @@ jobs:
       # Without it the consumers catch up on their daily run.
       HAS_TOKEN: ${{ secrets.BASE_UPDATE_DISPATCH_TOKEN != '' }}
     steps:
+      - uses: hustcer/setup-nu@v3.29
+        with:
+          version: "0.116.1"
+
       - name: Does the batch cover this image?
         id: gate
         env:
@@ -374,19 +378,23 @@ jobs:
           NOTIFY: ${{ inputs.notify }}
           PARENT: ${{ inputs.parent }}
         run: |
-          set -uo pipefail
-          send=false
-          if [[ $NOTIFY == true || $GITHUB_RUN_ATTEMPT -gt 1 ]]; then
-            send=true
-          elif [[ -n $PARENT ]]; then
+          let parent = $env.PARENT? | default ''
+          let send = if $env.NOTIFY == 'true' or ($env.GITHUB_RUN_ATTEMPT | into int) > 1 {
+            true
+          } else if $parent != '' {
             # The batch reads the change markers only while its wait step runs.
-            wait=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/${PARENT%%.*}/attempts/${PARENT##*.}/jobs" \
-              --jq '[.jobs[] | select(.name == "dispatch") | .steps[] | select(.name == "Wait for the image runs") | .status][0] // "completed"') ||
-              wait=completed
-            [[ $wait == completed ]] && send=true
-          fi
-          echo "send=$send" >>"$GITHUB_OUTPUT"
-          echo "notify=$NOTIFY attempt=$GITHUB_RUN_ATTEMPT parent=$PARENT -> send=$send"
+            let id = $parent | split row '.'
+            let jobs = ^gh api $"repos/($env.GITHUB_REPOSITORY)/actions/runs/($id.0)/attempts/($id.1)/jobs" | complete
+            let wait = if $jobs.exit_code != 0 { 'completed' } else {
+              $jobs.stdout | from json | get jobs | where name == 'dispatch' | get steps | flatten
+              | where name == 'Wait for the image runs' | get -o 0.status | default 'completed'
+            }
+            $wait == 'completed'
+          } else {
+            false
+          }
+          $"send=($send)\n" | save -a $env.GITHUB_OUTPUT
+          print $"notify=($env.NOTIFY) attempt=($env.GITHUB_RUN_ATTEMPT) parent=($parent) -> send=($send)"
 
       # Cross-repo `contents: write`; GITHUB_TOKEN cannot do it.
       - name: Dispatch base-updated
