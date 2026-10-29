@@ -2,7 +2,7 @@ name: Base notes
 
 # Comments on a PR that moves lago-packages bases (Renovate's "lago-packages
 # bases" PRs) with what changed between the old and new base: the apk package
-# diff and the OS CVEs it fixes (describe.sh, as in the base-refresh PRs).
+# diff and the OS CVEs it fixes (describe.nu, as in the base-refresh PRs).
 # Renovate has no release notes to show for a base tag, and it rewrites the
 # PR body on every rebase, so the notes go in one comment, updated in place.
 on:
@@ -18,6 +18,10 @@ permissions:
   id-token: write
   pull-requests: write
 
+defaults:
+  run:
+    shell: nu {0}
+
 jobs:
   notes:
     runs-on: ubuntu-latest
@@ -27,19 +31,23 @@ jobs:
       group: base-notes-${{ github.repository }}-${{ inputs.pr }}
       cancel-in-progress: true
     steps:
+      - uses: hustcer/setup-nu@eacad52a4634c4f8d17a94916f93be6856861b9c # v3.29
+        with:
+          version: "0.116.1"
       # the commit this workflow runs from, so a caller that pins it by SHA
       # also pins the scripts.
       - id: sha
         run: |
-          jwt=$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=lago-packages-base-notes" | jq -r .value)
-          claims=$(cut -d. -f2 <<<"$jwt" | tr '_-' '/+')
-          claims=$(printf '%s%s' "$claims" "$(printf '%*s' $(( (4 - ${#claims} % 4) % 4 )) '' | tr ' ' =)" | base64 -d)
-          ref=$(jq -r .job_workflow_ref <<<"$claims")
-          sha=$(jq -r .job_workflow_sha <<<"$claims")
-          [[ $ref == getlago/lago-packages/.github/workflows/base-notes.yaml@* && $sha =~ ^[0-9a-f]{40}$ ]] ||
-            { echo "::error::unexpected job_workflow_ref $ref"; exit 1; }
-          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+          let url = $"($env.ACTIONS_ID_TOKEN_REQUEST_URL)&audience=lago-packages-base-notes"
+          let token = http get --raw -H {Authorization: $"bearer ($env.ACTIONS_ID_TOKEN_REQUEST_TOKEN)"} $url | from json
+          let claims = $token.value | split row '.' | get 1 | decode base64 --url --nopad | decode | from json
+          let ref = $claims.job_workflow_ref
+          let sha = $claims.job_workflow_sha
+          if not (($ref | str starts-with 'getlago/lago-packages/.github/workflows/base-notes.yaml@') and $sha =~ '^[0-9a-f]{40}$') {
+            print $"::error::unexpected job_workflow_ref ($ref)"
+            exit 1
+          }
+          $"sha=($sha)\n" | save -a $env.GITHUB_OUTPUT
       - uses: actions/checkout@v7
         with:
           repository: getlago/lago-packages
@@ -48,8 +56,7 @@ jobs:
             .github/actions/base-notes
             .github/actions/base-refresh
       - run: |
-          echo "$GITHUB_WORKSPACE/.github/actions/base-notes" >>"$GITHUB_PATH"
-          echo "$GITHUB_WORKSPACE/.github/actions/base-refresh" >>"$GITHUB_PATH"
+          [base-notes base-refresh] | each {|d| $"($env.GITHUB_WORKSPACE)/.github/actions/($d)\n" } | str join | save -a $env.GITHUB_PATH
       - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
           version: v0.70.0
@@ -60,4 +67,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR: ${{ inputs.pr }}
-        run: notes.sh
+        run: ^notes.nu
