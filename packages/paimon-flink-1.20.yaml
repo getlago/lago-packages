@@ -73,6 +73,15 @@ vars:
   #   run below is what proves the pair still works. Since 3.2x protobuf-java
   #   ships no pom.properties, so scanners cannot read this version inside
   #   the bundle; the check below reads it off the class.
+  #
+  # NO SCANNER SEES these shaded copies (no pom.properties in the bundle), so
+  # a person must follow their advisories by hand: protobuf-java (above), and
+  # paimon-shade's guava 30.1.1-jre, caffeine 2.9.3 and netty 4.1.100.Final
+  # (paimon.shade.*.version at the release tag). A CycloneDX SBOM from
+  # cyclonedx-maven-plugin was tested and left out: Trivy reads it, but it
+  # lists every compile-scope dependency (110 the bundle does not hold, e.g.
+  # hadoop-common 2.8.5, zookeeper 3.4.6), so the overlay gate would fail on
+  # code that is not shipped.
   protobuf: 4.36.2
   # paimon.shade.version in Paimon's pom at the release tag.
   shade-version: 0.8.0
