@@ -142,7 +142,8 @@ jobs:
             --include "lago-signing.rsa.pub" \
             --include "*/chromium-*.apk" \
             --include "*/flink-1.20-*.apk" \
-            --include "*/flink-cdc-1.20-*.apk"
+            --include "*/flink-cdc-1.20-*.apk" \
+            --include "*/paimon-flink-1.20-*.apk"
           # Fail loudly rather than silently falling back to Wolfi's older
           # package, which would reintroduce the CVEs this overlay exists to fix.
           test -f ./repo-local/lago-signing.rsa.pub

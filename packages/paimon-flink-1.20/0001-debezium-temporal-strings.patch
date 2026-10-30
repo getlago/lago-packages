@@ -1,0 +1,219 @@
+Debezium JSON parsing: temporal strings, typed arrays, source-type options.
+
+Flink CDC's pipeline debezium-json declares temporal columns with the numeric
+debezium temporal types (MicroTimestamp, Timestamp, Date, MicroTime) but
+serializes the value as a formatted datetime string. Upstream
+DebeziumSchemaUtils.transformRawValue calls Long.parseLong on that string and
+throws NumberFormatException. This parses the string and re-formats it, so the
+typed TIMESTAMP, DATE and TIME columns stay.
+
+DebeziumJsonRecordParser keeps the element type of ARRAY columns and passes
+their original JSON on, so arrays no longer degrade to STRING. It also
+republishes the `__lago.source.type` column parameter that leg 1 sets as the
+table option `lago.source-type.<column>`, which leg 3 reads (see patch 0002).
+
+Moved from getlago/lago-infrastructure images/flink-paimon/patches/, where the
+classes were recompiled over the released jar.
+
+diff --git a/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/action/cdc/format/debezium/DebeziumJsonRecordParser.java b/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/action/cdc/format/debezium/DebeziumJsonRecordParser.java
+index 14dd00e..e71fec5 100644
+--- a/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/action/cdc/format/debezium/DebeziumJsonRecordParser.java
++++ b/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/action/cdc/format/debezium/DebeziumJsonRecordParser.java
+@@ -78,9 +78,27 @@ import static org.apache.paimon.utils.JsonSerdeUtil.isNull;
+ public class DebeziumJsonRecordParser extends AbstractJsonRecordParser {
+ 
+     private boolean hasSchema;
++    private static final String ARRAY_TYPE = "array";
++
+     private final Map<String, String> debeziumTypes = new HashMap<>();
+     private final Map<String, String> classNames = new HashMap<>();
+     private final Map<String, Map<String, String>> parameters = new HashMap<>();
++    // Element schema of ARRAY fields. Vanilla Paimon keeps only type/name/parameters, so the
++    // element type of an array was unavailable and every array degraded to STRING.
++    private final Map<String, JsonNode> itemsNodes = new HashMap<>();
++
++    // Leg 1 publishes each column's ORIGINAL Postgres type as this Connect schema parameter (see
++    // the flink-cdc image's PostgresSourceTypeCarrier / DebeziumJsonSourceTypeParameter patches).
++    // Flink CDC's type system is narrower than Postgres's — uuid, json, jsonb, xml and inet all
++    // collapse to STRING, and numeric does too under decimal.handling.mode=string — so by the time
++    // a record reaches here the wire type alone cannot tell `id` from any other string.
++    private static final String LAGO_SOURCE_TYPE_PARAMETER = "__lago.source.type";
++
++    // ... and we republish it as a Paimon table option under this prefix, keyed by column name.
++    // Leg 3 reads these when it creates the replica table, so the replica gets uuid/jsonb/numeric
++    // rather than text. The values stay STRING in Paimon, which is lossless — notably, coercing
++    // unbounded Postgres numeric into a Paimon DECIMAL would silently round it.
++    private static final String LAGO_SOURCE_TYPE_OPTION_PREFIX = "lago.source-type.";
+ 
+     public DebeziumJsonRecordParser(TypeMapping typeMapping, List<ComputedColumn> computedColumns) {
+         super(typeMapping, computedColumns);
+@@ -139,6 +157,7 @@ public class DebeziumJsonRecordParser extends AbstractJsonRecordParser {
+         debeziumTypes.clear();
+         classNames.clear();
+         parameters.clear();
++        itemsNodes.clear();
+ 
+         ArrayNode schemaFields = getNodeAs(schema, "fields", ArrayNode.class);
+         Preconditions.checkNotNull(schemaFields);
+@@ -163,6 +182,11 @@ public class DebeziumJsonRecordParser extends AbstractJsonRecordParser {
+             debeziumTypes.put(field, getString(node, "type"));
+             classNames.put(field, getString(node, "name"));
+ 
++            JsonNode itemsNode = node.get("items");
++            if (!isNull(itemsNode)) {
++                itemsNodes.put(field, itemsNode);
++            }
++
+             JsonNode parametersNode = node.get("parameters");
+             Map<String, String> parametersMap =
+                     isNull(parametersNode)
+@@ -192,10 +216,21 @@ public class DebeziumJsonRecordParser extends AbstractJsonRecordParser {
+         LinkedHashMap<String, String> resultMap = new LinkedHashMap<>();
+         for (Map.Entry<String, Object> entry : recordMap.entrySet()) {
+             String fieldName = entry.getKey();
+-            String rawValue = Objects.toString(entry.getValue(), null);
+             String debeziumType = debeziumTypes.get(fieldName);
+             String className = classNames.get(fieldName);
+ 
++            // Paimon's ARRAY/MAP/ROW casts parse JSON (TypeUtils.castFromCdcValueString), but
++            // Objects.toString on the converted java.util.List renders Java's "[a, b]" — unquoted
++            // and comma-joined, so it neither parses nor round-trips an element containing ", ".
++            // Re-serialise the original node instead.
++            JsonNode originalNode = record.get(fieldName);
++            String rawValue;
++            if (ARRAY_TYPE.equals(debeziumType) && !isNull(originalNode)) {
++                rawValue = originalNode.toString();
++            } else {
++                rawValue = Objects.toString(entry.getValue(), null);
++            }
++
+             String transformed =
+                     DebeziumSchemaUtils.transformRawValue(
+                             rawValue,
+@@ -208,8 +243,27 @@ public class DebeziumJsonRecordParser extends AbstractJsonRecordParser {
+ 
+             schemaBuilder.column(
+                     fieldName,
+-                    DebeziumSchemaUtils.toDataType(
+-                            debeziumType, className, parameters.get(fieldName)));
++                    ARRAY_TYPE.equals(debeziumType)
++                            ? DebeziumSchemaUtils.toArrayDataType(itemsNodes.get(fieldName))
++                            : DebeziumSchemaUtils.toDataType(
++                                    debeziumType, className, parameters.get(fieldName)));
++
++            // Declare the source type as a table option. Emitted on every record; CdcSchema
++            // options are diffed twice downstream (RichEventParser against what it last sent,
++            // then extractSchemaChanges against the committed schema), so a steady state
++            // produces no schema changes at all.
++            //
++            // Keyed by the raw field name. Safe here because these come from Postgres, which
++            // folds unquoted identifiers to lower case, so the name survives Paimon's
++            // case-insensitive lowering unchanged and still matches the column leg 3 looks up.
++            Map<String, String> fieldParameters = parameters.get(fieldName);
++            if (fieldParameters != null) {
++                String sourceType = fieldParameters.get(LAGO_SOURCE_TYPE_PARAMETER);
++                if (sourceType != null) {
++                    schemaBuilder.option(
++                            LAGO_SOURCE_TYPE_OPTION_PREFIX + fieldName, sourceType);
++                }
++            }
+         }
+ 
+         evalComputedColumns(resultMap, schemaBuilder);
+diff --git a/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/action/cdc/format/debezium/DebeziumSchemaUtils.java b/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/action/cdc/format/debezium/DebeziumSchemaUtils.java
+index 983b760..67a01e1 100644
+--- a/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/action/cdc/format/debezium/DebeziumSchemaUtils.java
++++ b/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/action/cdc/format/debezium/DebeziumSchemaUtils.java
+@@ -184,7 +184,27 @@ public class DebeziumSchemaUtils {
+         }
+         // pay attention to the temporal types
+         // https://debezium.io/documentation/reference/stable/connectors/mysql.html#mysql-temporal-types
+-        else if (Date.SCHEMA_NAME.equals(className)) {
++        // Flink CDC's pipeline debezium-json serializes temporal columns as formatted datetime
++        // strings (e.g. "2026-07-03 10:28:57.791684") while still declaring them with the numeric
++        // debezium temporal semantic types. When the raw value is such a string (not the numeric
++        // epoch these types normally carry), parse and re-format it so Paimon still types the column
++        // as TIMESTAMP/DATE/TIME instead of throwing NumberFormatException.
++        else if ((Date.SCHEMA_NAME.equals(className)
++                        || Timestamp.SCHEMA_NAME.equals(className)
++                        || MicroTimestamp.SCHEMA_NAME.equals(className)
++                        || MicroTime.SCHEMA_NAME.equals(className))
++                && !isNumericString(rawValue)) {
++            if (Date.SCHEMA_NAME.equals(className)) {
++                transformed = java.time.LocalDate.parse(rawValue).toString();
++            } else if (MicroTime.SCHEMA_NAME.equals(className)) {
++                transformed = java.time.LocalTime.parse(rawValue).toString();
++            } else {
++                int precision = Timestamp.SCHEMA_NAME.equals(className) ? 3 : 6;
++                transformed =
++                        DateTimeUtils.formatLocalDateTime(
++                                java.time.LocalDateTime.parse(rawValue.replace(' ', 'T')), precision);
++            }
++        } else if (Date.SCHEMA_NAME.equals(className)) {
+             // MySQL date
+             transformed = DateTimeUtils.toLocalDate(Integer.parseInt(rawValue)).toString();
+         } else if (Timestamp.SCHEMA_NAME.equals(className)) {
+@@ -260,6 +280,19 @@ public class DebeziumSchemaUtils {
+         return transformed;
+     }
+ 
++    private static boolean isNumericString(String s) {
++        if (s == null || s.isEmpty()) {
++            return false;
++        }
++        for (int i = 0; i < s.length(); i++) {
++            char c = s.charAt(i);
++            if (!Character.isDigit(c) && !(i == 0 && (c == '-' || c == '+'))) {
++                return false;
++            }
++        }
++        return true;
++    }
++
+     public static Object convertAvroObjectToJsonCompatible(Object avroObject) {
+         if (avroObject instanceof GenericData.Record) {
+             return convertRecord((GenericData.Record) avroObject);
+@@ -311,6 +344,43 @@ public class DebeziumSchemaUtils {
+         return list;
+     }
+ 
++    /**
++     * Builds ARRAY&lt;element&gt; from a Connect schema's "items" node.
++     *
++     * <p>Vanilla Paimon has no `array` case at all: an array field falls through {@link
++     * #fromDebeziumType} to STRING, and because the element schema is never read the element type
++     * is not even recoverable. That is silently lossy — the value arrives as a JSON array and ends
++     * up stored as whatever the JSON library's toString produced. Paimon's own value cast
++     * (TypeUtils.castFromCdcValueString) already implements ARRAY properly, so surfacing the type
++     * here is all that is needed.
++     *
++     * <p>Falls back to ARRAY&lt;STRING&gt; when the producer omitted "items", which is still closer
++     * than collapsing the whole column to a string.
++     */
++    public static DataType toArrayDataType(@Nullable JsonNode itemsNode) {
++        if (itemsNode == null) {
++            return DataTypes.ARRAY(DataTypes.STRING());
++        }
++        JsonNode typeNode = itemsNode.get("type");
++        String elementType = typeNode == null ? "string" : typeNode.asText();
++        JsonNode nameNode = itemsNode.get("name");
++        String elementClass = nameNode == null ? null : nameNode.asText();
++
++        Map<String, String> elementParameters = new HashMap<>();
++        JsonNode parametersNode = itemsNode.get("parameters");
++        if (parametersNode != null) {
++            parametersNode
++                    .fields()
++                    .forEachRemaining(e -> elementParameters.put(e.getKey(), e.getValue().asText()));
++        }
++
++        // Nested arrays: recurse rather than degrading the inner dimension to a string.
++        if ("array".equals(elementType)) {
++            return DataTypes.ARRAY(toArrayDataType(itemsNode.get("items")));
++        }
++        return DataTypes.ARRAY(toDataType(elementType, elementClass, elementParameters));
++    }
++
+     public static DataType toDataType(
+             String debeziumType, @Nullable String className, Map<String, String> parameters) {
+         if (className == null) {

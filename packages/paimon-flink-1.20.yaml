@@ -1,0 +1,183 @@
+# Apache Paimon's Flink 1.20 bundle and action jar, built from source — Lago build.
+#
+# The released bundle on Maven Central carries jackson-databind 2.14.x (two
+# copies: paimon-shade's relocated one and avro's, which paimon-format shades
+# with its pom.properties) and httpcore5 5.3.6 / httpclient5 5.5.1 (paimon-api,
+# REST catalog). No Paimon release moves any of them, so this builds from the
+# release tag instead:
+#
+#   1. apache/paimon-shade's jackson module, rebuilt on a current jackson under
+#      a `-lago<n>` version so it can never pass for the Apache artifact. It is
+#      installed into a Maven repository local to this build and not shipped
+#      on its own: the bundle shades it.
+#   2. apache/paimon at the release tag, against that shade, with the jackson
+#      BOM and the httpcomponents versions set through Maven properties, and
+#      with our two source patches (debezium parsing, CDC table options).
+#
+# Nothing here opens or rewrites a published jar: every jar in the apk is the
+# output of `mvn package`.
+#
+# Consumed by flink-paimon-base, which puts the jars in /opt/flink/lib for
+# getlago/lago-infrastructure images/flink-paimon.
+package:
+  name: paimon-flink-1.20
+  version: 1.4.2
+  epoch: 0
+  description: >-
+    Apache Paimon Flink 1.20 bundle and action jar, built from source with
+    current jackson and httpcomponents and Lago's CDC patches. Lago build.
+  copyright:
+    - license: Apache-2.0
+  dependencies:
+    runtime:
+      # The jars install into Flink's lib/ and are useless without it.
+      - flink-1.20
+
+environment:
+  contents:
+    keyring:
+      - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    repositories:
+      - https://packages.wolfi.dev/os
+    packages:
+      - bash
+      - busybox
+      - ca-certificates-bundle
+      - git
+      - maven-3.9
+      # Paimon targets Java 8 bytecode and its CI builds on 8 and 11.
+      - openjdk-11
+      - openjdk-11-default-jdk
+      - patch
+  environment:
+    JAVA_HOME: /usr/lib/jvm/java-11-openjdk
+    MAVEN_OPTS: -Xmx3g
+
+vars:
+  # Latest GA of each line when this was written (2026-10-30). Take the latest
+  # GA again on a bump; the CVE floors are only a lower bound.
+  #   jackson 2.22.4 (2026-10-17). CVE-2026-68497 needs >= 2.22.2 on 2.22.
+  #   jackson 3.x is a new groupId (tools.jackson) and API, not a drop-in.
+  jackson: 2.22.4
+  #   httpcore5 + httpcore5-h2 5.4.4 (2026-09-20). CVE-2026-54399 and
+  #   CVE-2026-54428 need >= 5.4.3. 5.5 is still beta.
+  httpcore: 5.4.4
+  #   httpclient5 5.6.5 (2026-10-06), built on httpcore 5.4.4.
+  #   CVE-2026-64607 needs >= 5.6.3. 5.7 is still beta.
+  httpclient: 5.6.5
+  # paimon.shade.version in Paimon's pom at the release tag.
+  shade-version: 0.8.0
+  shade-commit: b2cec3119bc64c1d98cfc02d3d00ce0c5bd4e9cc
+  paimon-commit: ac223f47d916f4c8e9c07fd1745db448e4e7d0d8
+  # Bump when the shade build changes with no jackson bump.
+  shade-suffix: lago1
+  # Latest release (3.6.2). Paimon itself already builds with 3.5.3.
+  maven-shade-plugin: 3.6.2
+
+pipeline:
+  - uses: git-checkout
+    with:
+      repository: https://github.com/apache/paimon-shade.git
+      tag: release-${{vars.shade-version}}
+      expected-commit: ${{vars.shade-commit}}
+      destination: paimon-shade
+
+  - uses: git-checkout
+    with:
+      repository: https://github.com/apache/paimon.git
+      tag: release-${{package.version}}
+      expected-commit: ${{vars.paimon-commit}}
+      destination: paimon
+
+  - name: Build paimon-shade-jackson-2 on the pinned jackson
+    working-directory: paimon-shade/paimon-shade-jackson-parent
+    runs: |
+      set -eu
+      shade_jackson="${{vars.jackson}}-${{vars.shade-suffix}}"
+      # The jackson parent hardcodes `<jackson>-<shade>` as its version and its
+      # two children repeat it as their parent version. Rename all three, and
+      # move the jackson.version property it feeds to its BOM import. The greps
+      # fail the build if the release tag no longer looks like this.
+      upstream="$(sed -n 's|^    <version>\(.*-${{vars.shade-version}}\)</version>$|\1|p' pom.xml)"
+      test -n "$upstream"
+      sed -i "s|<version>${upstream}</version>|<version>${shade_jackson}-${{vars.shade-version}}</version>|" \
+        pom.xml paimon-shade-jackson-2/pom.xml paimon-shade-jackson-module-jsonSchema-2/pom.xml
+      sed -i "s|<jackson.version>[^<]*</jackson.version>|<jackson.version>${{vars.jackson}}</jackson.version>|" pom.xml
+      grep -q "<jackson.version>${{vars.jackson}}</jackson.version>" pom.xml
+      test "$(grep -c "<version>${shade_jackson}-${{vars.shade-version}}</version>" \
+        pom.xml paimon-shade-jackson-2/pom.xml paimon-shade-jackson-module-jsonSchema-2/pom.xml \
+        | awk -F: '{s+=$2} END {print s}')" -eq 3
+
+      # paimon-shade pins maven-shade-plugin 3.4.1, whose ASM cannot read the
+      # Java 21 classes under META-INF/versions/21 that jackson-core ships
+      # since 2.18. The root pom is read through the parent's relativePath and
+      # is not installed, so this changes the build tool only.
+      sed -i '/<artifactId>maven-shade-plugin<\/artifactId>/{n;s|<version>3\.4\.1</version>|<version>${{vars.maven-shade-plugin}}</version>|}' ../pom.xml
+      grep -A1 '<artifactId>maven-shade-plugin</artifactId>' ../pom.xml \
+        | grep -q '<version>${{vars.maven-shade-plugin}}</version>'
+
+      mvn -B -ntp install -DskipTests \
+        -Dmaven.repo.local="${PWD}/../../.m2"
+
+  # packages/paimon-flink-1.20/, copied into the workspace root by
+  # build-packages.yaml (--source-dir); the paths are relative to paimon/.
+  - uses: patch
+    with:
+      patches: ../0001-debezium-temporal-strings.patch ../0002-cdc-table-options.patch ../0003-jackson-bom.patch
+    working-directory: paimon
+
+  - name: Build the Flink 1.20 bundle and the action jar
+    working-directory: paimon
+    runs: |
+      set -eu
+      # -Dtest runs the unit tests that cover the patched classes and the
+      # jackson/avro serialization paths, on the pinned versions. Surefire
+      # only: `package` stops before failsafe's ITCases, which need Docker.
+      # -Pflink1: the module list of paimon-flink-1.20 sits in a profile that is
+      # active by default, and on JDK 11 the JDK-activated profiles turn
+      # active-by-default ones off.
+      mvn -B -ntp package -Pflink1 \
+        -pl paimon-flink/paimon-flink-1.20,paimon-flink/paimon-flink-action -am \
+        -Dmaven.repo.local="${PWD}/../.m2" \
+        -Dpaimon.shade.jackson.version="${{vars.jackson}}-${{vars.shade-suffix}}" \
+        -Dlago.jackson.version="${{vars.jackson}}" \
+        -Dapache.hc.core.version="${{vars.httpcore}}" \
+        -Dapache.hc.client.version="${{vars.httpclient}}" \
+        -Dspotless.check.skip=true \
+        -Drat.skip=true \
+        -Dsurefire.failIfNoSpecifiedTests=false \
+        -Dtest='*JsonSerde*Test,DataTypeJsonParserTest,RESTApiJsonTest,Avro*Test,Json*Test,UpdatedDataFieldsProcessFunctionBaseTest,Debezium*Test,KafkaDebeziumJsonDeserializationSchemaTest'
+
+  - name: Check the bundled versions and install the jars
+    working-directory: paimon
+    runs: |
+      set -eu
+      bundle=paimon-flink/paimon-flink-1.20/target/paimon-flink-1.20-${{package.version}}.jar
+      v() { unzip -p "$bundle" "META-INF/maven/$1/pom.properties" | sed -n 's/^version=//p'; }
+      test "$(v com.fasterxml.jackson.core/jackson-databind)" = "${{vars.jackson}}"
+      test "$(v com.fasterxml.jackson.core/jackson-core)" = "${{vars.jackson}}"
+      test "$(v org.apache.httpcomponents.core5/httpcore5)" = "${{vars.httpcore}}"
+      test "$(v org.apache.httpcomponents.core5/httpcore5-h2)" = "${{vars.httpcore}}"
+      test "$(v org.apache.httpcomponents.client5/httpclient5)" = "${{vars.httpclient}}"
+      # The patched classes are in.
+      unzip -l "$bundle" | grep -q 'org/apache/paimon/flink/sink/cdc/CdcSchema.class'
+      unzip -p "$bundle" org/apache/paimon/flink/action/cdc/format/debezium/DebeziumJsonRecordParser.class \
+        | grep -aq 'lago.source-type.'
+
+      install -Dm644 "$bundle" \
+        "${{targets.destdir}}/opt/flink/lib/paimon-flink-1.20-${{package.version}}.jar"
+      install -Dm644 paimon-flink/paimon-flink-action/target/paimon-flink-action-${{package.version}}.jar \
+        "${{targets.destdir}}/opt/flink/lib/paimon-flink-action-${{package.version}}.jar"
+
+test:
+  environment:
+    contents:
+      packages:
+        - busybox
+  pipeline:
+    - runs: |
+        test -f /opt/flink/lib/paimon-flink-1.20-${{package.version}}.jar
+        test -f /opt/flink/lib/paimon-flink-action-${{package.version}}.jar
+        unzip -p /opt/flink/lib/paimon-flink-1.20-${{package.version}}.jar \
+          META-INF/maven/com.fasterxml.jackson.core/jackson-databind/pom.properties \
+          | grep -qx 'version=${{vars.jackson}}'

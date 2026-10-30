@@ -1,0 +1,31 @@
+Pin the unrelocated jackson copy with the jackson BOM.
+
+Avro 1.11.4 pulls com.fasterxml.jackson.core:jackson-databind 2.14.3, and
+paimon-format shades it into the bundle as org.apache.paimon.shade.com.fasterxml.
+That copy keeps its META-INF/maven pom.properties, which is what scanners read
+(CVE-2026-68497). Importing jackson-bom in the root dependencyManagement moves
+jackson-core, jackson-databind and jackson-annotations together. The recipe
+passes the version as -Dlago.jackson.version.
+
+diff --git a/pom.xml b/pom.xml
+index f22ec0a..40a8b9e 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -240,6 +240,17 @@ under the License.
+                 <version>${findbugs.version}</version>
+             </dependency>
+ 
++            <!-- Lago build: pin every unrelocated com.fasterxml.jackson artifact. Avro pulls
++                 jackson-databind in, and paimon-format shades that copy into the bundle. The
++                 version comes from -Dlago.jackson.version; the build fails without it. -->
++            <dependency>
++                <groupId>com.fasterxml.jackson</groupId>
++                <artifactId>jackson-bom</artifactId>
++                <version>${lago.jackson.version}</version>
++                <type>pom</type>
++                <scope>import</scope>
++            </dependency>
++
+             <dependency>
+                 <groupId>org.junit</groupId>
+                 <artifactId>junit-bom</artifactId>
