@@ -215,6 +215,50 @@ jobs:
           vuln-type: 'os,library'
           trivyignores: .trivyignore.d/${{ env.IMAGE_NAME }}
 
+      - name: Unpack the overlay packages this image installs
+        # The two scans above miss the jars of overlay packages: `trivy image`
+        # does not report a language package that an OS package owns, and
+        # Wolfi's secdb knows nothing of our apks. That hides every jar of
+        # flink-1.20, flink-cdc-1.20 and paimon-flink-1.20 (jackson,
+        # httpcomponents, protobuf, ...). Unpack the overlay apks into a plain
+        # directory and scan their files as a rootfs below.
+        #
+        # Only the versions this image installs, read from its apko SBOM: the
+        # bucket keeps every published version, and an old apk nobody installs
+        # must not fail the gate.
+        if: steps.overlay.outputs.needed == 'true'
+        run: |
+          set -euo pipefail
+          for arch in x86_64 aarch64; do
+            mkdir -p "overlay-rootfs/$arch"
+            jq -r '.packages[] | select(.SPDXID | startswith("SPDXRef-Package-apk-"))
+                   | "\(.name)-\(.versionInfo).apk"' \
+              "sbom-${{ env.IMAGE_NAME }}-$arch.spdx.json" | sort -u > "overlay-$arch.txt"
+            while read -r apk; do
+              # Wolfi's apks are not in repo-local; only overlay ones match.
+              if [ -f "repo-local/$arch/$apk" ]; then
+                echo "$arch: $apk"
+                tar -xzf "repo-local/$arch/$apk" -C "overlay-rootfs/$arch" 2>/dev/null
+              fi
+            done < "overlay-$arch.txt"
+          done
+          find overlay-rootfs -name '*.jar' | wc -l
+
+      - name: Scan the overlay packages' libraries for HIGH/CRITICAL CVEs (Trivy)
+        # Same gate as the image scans, on the unpacked overlay files. Runs on
+        # every build, so the daily batch fails on a new CVE in these jars.
+        if: steps.overlay.outputs.needed == 'true'
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: rootfs
+          scan-ref: overlay-rootfs
+          format: table
+          exit-code: '1'
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+          vuln-type: 'library'
+          trivyignores: .trivyignore.d/${{ env.IMAGE_NAME }}
+
       - name: Login to GHCR
         # GITHUB_TOKEN + `packages: write` is the only credential needed.
         # Writes ~/.docker/config.json, which crane and buildx both read.
