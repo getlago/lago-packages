@@ -5,8 +5,8 @@
 #
 # The service is one `fastapi run` (uvicorn) process. It opens outbound
 # connections to Postgres (asyncpg) and Redis and serves HTTP. Every locked
-# runtime package ships a manylinux wheel, so it needs the interpreter and CA
-# certificates and nothing else. No shell, no busybox, no uv.
+# runtime package ships a manylinux wheel, so it needs the interpreter, CA
+# certificates and the C++ runtime that greenlet links, and nothing else. No shell, no busybox, no uv.
 #
 # uid 65532 cannot bind a port below 1024: the image listens on 8080.
 contents:
@@ -22,6 +22,10 @@ contents:
     # pyvenv.cfg and in each console script's shebang. Moves together with
     # requires-python in lago-data api/pyproject.toml.
     - python-3.11
+    # greenlet (SQLAlchemy's async engine) links them. Listed, not left to a
+    # transitive dependency of python-3.11.
+    - libstdc++
+    - libgcc
 
 accounts:
   groups:
