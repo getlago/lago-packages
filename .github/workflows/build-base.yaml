@@ -225,24 +225,43 @@ jobs:
         #
         # Only the versions this image installs, read from its apko SBOM: the
         # bucket keeps every published version, and an old apk nobody installs
-        # must not fail the gate.
+        # must not fail the gate. Every name/version pair in the SBOM is a
+        # candidate; the file test keeps the overlay ones (Wolfi's apks are not
+        # in repo-local). A manifest that names ./repo-local installs at least
+        # one overlay apk, so 0 apks on an arch means the selection broke (an
+        # SBOM format change, say), and an apk that unpacks to no file means
+        # the unpack broke: fail rather than scan nothing. 0 jars is allowed:
+        # gotenberg-base's only overlay apk, chromium, has none.
         if: steps.overlay.outputs.needed == 'true'
         run: |
           set -euo pipefail
           for arch in x86_64 aarch64; do
-            mkdir -p "overlay-rootfs/$arch"
-            jq -r '.packages[] | select(.SPDXID | startswith("SPDXRef-Package-apk-"))
-                   | "\(.name)-\(.versionInfo).apk"' \
-              "sbom-${{ env.IMAGE_NAME }}-$arch.spdx.json" | sort -u > "overlay-$arch.txt"
+            root="overlay-rootfs/$arch"
+            mkdir -p "$root"
+            apks=0
             while read -r apk; do
-              # Wolfi's apks are not in repo-local; only overlay ones match.
               if [ -f "repo-local/$arch/$apk" ]; then
-                echo "$arch: $apk"
-                tar -xzf "repo-local/$arch/$apk" -C "overlay-rootfs/$arch" 2>/dev/null
+                dest="$root/${apk%.apk}"
+                mkdir -p "$dest"
+                tar --warning=no-unknown-keyword -xzf "repo-local/$arch/$apk" -C "$dest"
+                files=$(find "$dest" -type f ! -name '.*' | wc -l)
+                echo "$arch: $apk ($files files)"
+                if [ "$files" -eq 0 ]; then
+                  echo "::error::$arch: $apk unpacked to no file"
+                  exit 1
+                fi
+                apks=$((apks + 1))
               fi
-            done < "overlay-$arch.txt"
+            done < <(jq -r '.packages[] | select(.versionInfo != null)
+                            | "\(.name)-\(.versionInfo).apk"' \
+                       "sbom-${{ env.IMAGE_NAME }}-$arch.spdx.json" | sort -u)
+            jars=$(find "$root" -name '*.jar' | wc -l)
+            echo "$arch: $apks overlay apks, $jars jars"
+            if [ "$apks" -eq 0 ]; then
+              echo "::error::$arch: no overlay apk selected from sbom-${{ env.IMAGE_NAME }}-$arch.spdx.json"
+              exit 1
+            fi
           done
-          find overlay-rootfs -name '*.jar' | wc -l
 
       - name: Scan the overlay packages' libraries for HIGH/CRITICAL CVEs (Trivy)
         # Same gate as the image scans, on the unpacked overlay files. Runs on
