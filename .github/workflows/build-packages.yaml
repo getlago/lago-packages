@@ -35,7 +35,11 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-latest
+            # Not ubuntu-latest: on ubuntu-26.04, setup-melange's
+            # `apt install qemu-user-static` fails ("no installation
+            # candidate"), and chainguard-dev/actions main still does it.
+            # Move back when setup-melange supports 26.04.
+            runner: ubuntu-24.04
           - arch: aarch64
             runner: linux-arm64
     runs-on: ${{ matrix.runner }}
