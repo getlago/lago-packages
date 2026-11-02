@@ -13,7 +13,8 @@
 #   2. apache/paimon at the release tag, against that shade, with the jackson
 #      BOM and the httpcomponents and protobuf versions set through Maven
 #      properties, and
-#      with our two source patches (debezium parsing, CDC table options).
+#      with our source patches (debezium parsing, CDC table options, the
+#      UpdateColumnNullability branch).
 #
 # Nothing here opens or rewrites a published jar: every jar in the apk is the
 # output of `mvn package`.
@@ -141,7 +142,7 @@ pipeline:
   # build-packages.yaml (--source-dir); the paths are relative to paimon/.
   - uses: patch
     with:
-      patches: ../0001-debezium-temporal-strings.patch ../0002-cdc-table-options.patch ../0003-jackson-bom.patch
+      patches: ../0001-debezium-temporal-strings.patch ../0002-cdc-table-options.patch ../0003-jackson-bom.patch ../0004-cdc-update-column-nullability.patch
     working-directory: paimon
 
   - name: Build the Flink 1.20 bundle and the action jar
