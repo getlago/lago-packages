@@ -27,9 +27,9 @@ contents:
     - coreutils
     - findutils
     - sed
-    # pg_dump and psql. 17 matches the old image's postgresql-client-17: its
-    # pg_dump writes the `SET transaction_timeout` line the scripts strip.
-    - postgresql-17-client
+    # pg_dump and psql. 18: Wolfi ships the CVE fixes there first (17.11 is
+    # unpublished). Its dumps restore into our PG 15/16 servers like 17's.
+    - postgresql-18-client
     # `dbt deps` runs at job start and can fetch git packages.
     - git
 
@@ -67,4 +67,4 @@ work-dir: /data_pipeline
 annotations:
   org.opencontainers.image.source: https://github.com/getlago/lago-packages
   org.opencontainers.image.licenses: AGPL-3.0
-  org.opencontainers.image.description: Hardened Wolfi-based python-3.11 + postgresql-17 client runtime image for the lago-data dbt pipeline
+  org.opencontainers.image.description: Hardened Wolfi-based python-3.11 + postgresql-18 client runtime image for the lago-data dbt pipeline
