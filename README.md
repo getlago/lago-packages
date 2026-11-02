@@ -18,6 +18,8 @@ an SBOM, and every image is signed with cosign (keyless, via GitHub OIDC).
 | `ghcr.io/getlago/lago-front-build` | nodejs-24, pnpm | build stage of `lago-front` |
 | `ghcr.io/getlago/data-agent-base` | python-3.13, nonroot | runtime stage of `lago-data-agent` |
 | `ghcr.io/getlago/data-agent-build` | python-3.13 + headers, uv, git, build-base | build + model-vendoring stages of `lago-data-agent` |
+| `ghcr.io/getlago/data-api-base` | python-3.11, nonroot, no shell | runtime stage of `lago-data-api` (lago-data `api/`) |
+| `ghcr.io/getlago/data-api-build` | python-3.11, uv | build stage of `lago-data-api` |
 | `ghcr.io/getlago/dbt-pipeline-base` | python-3.11, postgresql-17-client, bash, git, nonroot, no busybox | runtime stage of `lago-data-pipeline` (lago-data `data_pipeline/`) |
 | `ghcr.io/getlago/dbt-pipeline-build` | python-3.11, uv, git | build stage of `lago-data-pipeline` |
 | `ghcr.io/getlago/events-processor-base` | minimal runtime | runtime stage of `events-processor` |

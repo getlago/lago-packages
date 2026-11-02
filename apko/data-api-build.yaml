@@ -1,0 +1,30 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - busybox
+    # Must match data-api-base.yaml: the copied venv records this path.
+    # No build-base or headers: every locked runtime package has a wheel.
+    # Add them when an sdist needs a compiler.
+    - python-3.11
+    - uv
+
+environment:
+  PATH: /usr/local/bin:/usr/bin:/bin
+  # api/pyproject.toml sets `[tool.uv] python-preference = "only-managed"`,
+  # which pulls a CPython that Wolfi cannot patch. These override it, as in
+  # dbt-pipeline-build.yaml.
+  UV_PYTHON_PREFERENCE: only-system
+  UV_PYTHON: /usr/bin/python3.11
+
+archs:
+  - x86_64
+  - aarch64
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Wolfi-based builder image for the lago-data API (python-3.11 + uv)
