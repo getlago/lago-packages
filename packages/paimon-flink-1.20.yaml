@@ -24,7 +24,7 @@
 package:
   name: paimon-flink-1.20
   version: 1.4.2
-  epoch: 1
+  epoch: 2
   description: >-
     Apache Paimon Flink 1.20 bundle and action jar, built from source with
     current jackson, guava, netty and httpcomponents and Lago's CDC
@@ -144,6 +144,21 @@ pipeline:
       grep -A1 '<artifactId>maven-shade-plugin</artifactId>' ../pom.xml \
         | grep -q '<version>${{vars.maven-shade-plugin}}</version>'
 
+      # The jackson NOTICE files still list 2.14.2: rewrite each line to the
+      # version Maven resolves (jackson-annotations has no patch since 2.20).
+      for mod in paimon-shade-jackson-2 paimon-shade-jackson-module-jsonSchema-2; do
+        mvn -B -ntp -q dependency:list -pl "$mod" -DincludeScope=runtime \
+          -DoutputFile="${PWD}/$mod/deps.txt" -Dmaven.repo.local="${PWD}/../../.m2"
+        notice="$mod/src/main/resources/META-INF/NOTICE"
+        for ga in $(sed -n 's|^- \(com[.]fasterxml[.]jackson[^:]*:[^:]*\):.*$|\1|p' "$notice"); do
+          v="$(awk -v ga="$ga" '{split($1, a, ":")} a[1] ":" a[2] == ga {print a[4]}' "$mod/deps.txt")"
+          test -n "$v"
+          sed -i "s|^- ${ga}:.*$|- ${ga}:${v}|" "$notice"
+        done
+      done
+      grep -qxF -- "- com.fasterxml.jackson.core:jackson-databind:${{vars.jackson}}" \
+        paimon-shade-jackson-2/src/main/resources/META-INF/NOTICE
+
       mvn -B -ntp install -DskipTests \
         -Dmaven.repo.local="${PWD}/../../.m2"
 
@@ -209,6 +224,25 @@ pipeline:
     working-directory: paimon
     runs: |
       set -eu
+      # The module NOTICE files list the upstream versions of what we pin:
+      # rewrite them to the pins. jackson-annotations takes the BOM's own version.
+      annotations="$(sed -n 's|.*<jackson.version.annotations>\(.*\)</jackson.version.annotations>.*|\1|p' \
+        "../.m2/com/fasterxml/jackson/jackson-bom/${{vars.jackson}}/jackson-bom-${{vars.jackson}}.pom")"
+      test -n "$annotations"
+      for pin in \
+        "paimon-format com.fasterxml.jackson.core:jackson-core ${{vars.jackson}}" \
+        "paimon-format com.fasterxml.jackson.core:jackson-databind ${{vars.jackson}}" \
+        "paimon-format com.fasterxml.jackson.core:jackson-annotations $annotations" \
+        "paimon-format com.google.protobuf:protobuf-java ${{vars.protobuf}}" \
+        "paimon-api org.apache.httpcomponents.core5:httpcore5 ${{vars.httpcore}}" \
+        "paimon-api org.apache.httpcomponents.client5:httpclient5 ${{vars.httpclient}}" \
+        "paimon-core org.apache.httpcomponents.core5:httpcore5 ${{vars.httpcore}}" \
+        "paimon-core org.apache.httpcomponents.client5:httpclient5 ${{vars.httpclient}}"; do
+        set -- $pin
+        notice="$1/src/main/resources/META-INF/NOTICE"
+        sed -i "s|^- $2:.*$|- $2:$3|" "$notice"
+        grep -qxF -- "- $2:$3" "$notice"
+      done
       # -Dtest runs the unit tests that cover the patched classes and the
       # jackson/avro serialization paths, on the pinned versions. Surefire
       # only: `package` stops before failsafe's ITCases, which need Docker.
@@ -258,12 +292,33 @@ pipeline:
       unzip -p "$bundle" "$cls" > bundle.class
       test -s shade.class && test -s bundle.class
       cmp -s shade.class bundle.class
-      unzip -p "$bundle" META-INF/io.netty.versions.properties \
-        | grep -qx 'netty-all.version=${{vars.netty}}'
+      unzip -p "$bundle" META-INF/io.netty.versions.properties > netty.properties
+      grep -qx 'netty-all.version=${{vars.netty}}' netty.properties
       # The patched classes are in.
-      unzip -l "$bundle" | grep -q 'org/apache/paimon/flink/sink/cdc/CdcSchema.class'
-      unzip -p "$bundle" org/apache/paimon/flink/action/cdc/format/debezium/DebeziumJsonRecordParser.class \
-        | grep -aq 'lago.source-type.'
+      # No `| grep -q`: under pipefail, grep exiting early can kill unzip with SIGPIPE (141).
+      unzip -l "$bundle" org/apache/paimon/flink/sink/cdc/CdcSchema.class > /dev/null
+      unzip -p "$bundle" org/apache/paimon/flink/action/cdc/format/debezium/DebeziumJsonRecordParser.class > parser.class
+      grep -aq 'lago.source-type.' parser.class
+
+      # The merged NOTICE must name the pinned versions (attribution only: the
+      # classes are checked above).
+      unzip -p "$bundle" META-INF/NOTICE > notice.txt
+      test -s notice.txt
+      annotations_v="$(sed -n 's|.*<jackson.version.annotations>\(.*\)</jackson.version.annotations>.*|\1|p' \
+        "../.m2/com/fasterxml/jackson/jackson-bom/${{vars.jackson}}/jackson-bom-${{vars.jackson}}.pom")"
+      test -n "$annotations_v"
+      pinned() {
+        if grep -E "^- $1:" notice.txt | grep -vE ":($2)$"; then exit 1; fi
+        grep -qE "^- $1:" notice.txt
+      }
+      pinned 'com[.]fasterxml[.]jackson[.][a-z]+:jackson-[a-z0-9-]+' "${{vars.jackson}}|$annotations_v"
+      pinned 'org[.]apache[.]httpcomponents[.]core5:httpcore5(-h2)?' "${{vars.httpcore}}"
+      pinned 'org[.]apache[.]httpcomponents[.]client5:httpclient5' "${{vars.httpclient}}"
+      pinned 'com[.]google[.]protobuf:protobuf-java' "${{vars.protobuf}}"
+      pinned 'com[.]google[.]guava:guava' "${{vars.guava}}"
+      pinned 'io[.]netty:netty-[a-z0-9-]+(:[a-z0-9_-]+)?' "${{vars.netty}}"
+      pinned 'org[.]apache[.]avro:avro' "$(v org.apache.avro/avro)"
+      pinned 'io[.]airlift:aircompressor' "$(v io.airlift/aircompressor)"
 
       install -Dm644 "$bundle" \
         "${{targets.destdir}}/opt/flink/lib/paimon-flink-1.20-${{package.version}}.jar"
