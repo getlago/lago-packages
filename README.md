@@ -38,7 +38,7 @@ an SBOM, and every image is signed with cosign (keyless, via GitHub OIDC).
 | `ghcr.io/getlago/rev-rec-build` | python-3.13 + headers, uv, build-base | build stage of `rev-rec` |
 | `ghcr.io/getlago/rev-rec-flink-base` | flink-1.20 (overlay), openjdk-17-jre, jemalloc, flink uid 9999 | JobManager/TaskManager image of `rev-rec` |
 | `ghcr.io/getlago/rev-rec-flink-build` | go, git | Beam `boot` build stage of the `rev-rec` flink image |
-| `ghcr.io/getlago/flink-paimon-base` | flink-1.20 (overlay), openjdk-17-jre, jemalloc, flink uid 9999 | runtime of `infra/flink-paimon` (lago-infrastructure) |
+| `ghcr.io/getlago/flink-paimon-base` | flink-1.20 and paimon-flink-1.20 (overlay), openjdk-17-jre, jemalloc, flink uid 9999 | runtime of `infra/flink-paimon` (lago-infrastructure) |
 | `ghcr.io/getlago/flink-paimon-build` | openjdk-17 (JDK), bash, nonroot | build stages and tests of `infra/flink-paimon` |
 | `ghcr.io/getlago/flink-cdc-base` | flink-cdc-1.20 (overlay: Flink 1.20, openjdk-11-jre, S3 plugin enabled), jemalloc, flink uid 9999 | runtime of `infra/flink-cdc` (lago-infrastructure) |
 | `ghcr.io/getlago/flink-cdc-build` | openjdk-11 (JDK), maven-3.9, git, patch, curl | build stages of `infra/flink-cdc` |
@@ -321,8 +321,16 @@ recipe for each exception — today only `chromium`, where Wolfi is months behin
 the CVE fixes gotenberg needs, `ruby-4.0`, which Wolfi has since caught up
 on, and Flink 1.20, which Wolfi does not ship (2.x only): `flink-1.20`
 (JRE 17; rev-rec, where Beam's FlinkRunner needs 1.20, and flink-paimon) and
-`flink-cdc-1.20` (JRE 11, for flink-cdc). Each recipe builds an apk for both arches, signed with the Lago melange key
+`flink-cdc-1.20` (JRE 11, for flink-cdc) — plus `paimon-flink-1.20`, Apache
+Paimon's Flink bundle and action jar built from source, because no Paimon
+release moves the jackson and httpcomponents versions it bundles, and so that
+our CDC patches go in as source diffs (`packages/paimon-flink-1.20/`) rather
+than as classes swapped into the released jar. Each recipe builds an apk for both arches, signed with the Lago melange key
 and published to the private S3 bucket `lago-wolfi-packages`.
+
+A recipe that needs patches keeps them in `packages/<name>/`.
+`build-packages.yaml` passes that directory as melange's `--source-dir`, so
+they sit in the workspace root.
 
 A manifest opts into the overlay by naming it as a repository:
 
@@ -349,7 +357,11 @@ pulls an explicit allowlist of apks rather than the whole bucket.
 Edit `packages/<name>.yaml` and push. Two workflows run, in order:
 
 1. `build-packages.yaml` builds the apk on both arches, re-signs the index and
-   publishes to S3.
+   publishes to S3. A push builds only the recipes it changed
+   (`packages/<name>.yaml` or a file under `packages/<name>/`); a push that
+   changes the workflow itself, or a manual run with no `package` input,
+   builds them all. `paimon-flink-1.20` is a Maven build of Paimon and takes
+   tens of minutes per arch.
 2. `build-bases.yaml` starts on `workflow_run` and rebuilds every manifest that
    names `./repo-local`.
 

@@ -1,0 +1,29 @@
+Apply UpdateColumnNullability in the CDC schema-evolution path.
+
+Since Paimon 1.2, NestedSchemaUtils.generateNestedColumnUpdates emits the
+nullability of a type change as its own UpdateColumnNullability. 1.1.1
+carried it inside UpdateColumnType. UpdatedDataFieldsProcessFunctionBase
+has no branch for it, so a column whose type and nullability change
+together throws "Unsupported schema change class" and kills the job.
+Upstream 1.4.2 has the same gap.
+
+Moved from getlago/lago-infrastructure#2220 (review finding). EvolveTest
+step 7 in images/flink-paimon/test covers it.
+
+diff --git a/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/UpdatedDataFieldsProcessFunctionBase.java b/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/UpdatedDataFieldsProcessFunctionBase.java
+--- a/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/UpdatedDataFieldsProcessFunctionBase.java
++++ b/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/UpdatedDataFieldsProcessFunctionBase.java
+@@ -148,6 +148,13 @@
+                                     newTopLevelFieldType,
+                                     identifier.getFullName()));
+             }
++        } else if (schemaChange instanceof SchemaChange.UpdateColumnNullability) {
++            // PATCHED (lago): since 1.2, NestedSchemaUtils.generateNestedColumnUpdates emits the
++            // nullability of a type change as its own UpdateColumnNullability (1.1.1 carried it
++            // inside UpdateColumnType). Without this branch the else below throws and kills the
++            // job. SchemaManager still refuses a nullable primary key and, when the table sets
++            // alter-column-null-to-not-null.disabled, a null-to-not-null change.
++            catalog.alterTable(identifier, schemaChange, false);
+         } else if (schemaChange instanceof SchemaChange.UpdateColumnComment) {
+             catalog.alterTable(identifier, schemaChange, false);
+         } else if (schemaChange instanceof SchemaChange.UpdateComment) {

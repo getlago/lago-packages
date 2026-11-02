@@ -1,0 +1,273 @@
+Carry table-level options through the CDC schema-evolution path.
+
+CdcSchema gains table-level options. The create and evolve paths stop
+discarding them, or emit SchemaChange.setOption, so the source-type
+annotations that leg 2 writes reach the Paimon table. RichEventParser counts
+an option-only change as a change: since Paimon 1.2 it returns null when
+nothing changed, and an option-only change was dropped silently.
+
+Moved from getlago/lago-infrastructure images/flink-paimon/patches/, where the
+classes were recompiled over the released jar. images/flink-paimon/README.md
+there explains why this channel is needed and how test/run.sh covers it.
+
+diff --git a/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/CdcSchema.java b/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/CdcSchema.java
+index 229dcc6..5b2cb34 100644
+--- a/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/CdcSchema.java
++++ b/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/CdcSchema.java
+@@ -34,7 +34,24 @@ import java.util.Map;
+ import java.util.Objects;
+ import java.util.concurrent.atomic.AtomicInteger;
+ 
+-/** A schema change message from the CDC source. */
++/**
++ * A schema change message from the CDC source.
++ *
++ * <p>PATCHED (lago): adds table-level {@code options}. Upstream carries only fields, primary keys
++ * and a table comment, so a CDC source has no way to declare table properties — {@link
++ * RichCdcMultiplexRecord#buildSchema()} hardcoded an empty option map on the create path, and
++ * {@link org.apache.paimon.flink.sink.cdc.UpdatedDataFieldsProcessFunctionBase} emitted no {@code
++ * SchemaChange.setOption} on the evolve path.
++ *
++ * <p>We need that channel to publish each column's ORIGINAL Postgres type (as {@code
++ * lago.source-type.<column>}) alongside the data. Leg 1 narrows uuid/jsonb/numeric/varchar(n) to
++ * STRING before Paimon ever sees them, and leg 3 reconstructs the real Postgres type from these
++ * options when it creates the replica table. Values stay strings in Paimon — which is lossless —
++ * and the type travels beside them as structured metadata rather than in a column description.
++ *
++ * <p>The 3-arg constructor is retained so unpatched classes still in the released jar (the other
++ * record parsers, RichCdcRecord) keep linking.
++ */
+ public class CdcSchema implements Serializable {
+ 
+     private static final long serialVersionUID = 1L;
+@@ -45,10 +62,21 @@ public class CdcSchema implements Serializable {
+ 
+     @Nullable private final String comment;
+ 
++    private final Map<String, String> options;
++
+     public CdcSchema(List<DataField> fields, List<String> primaryKeys, @Nullable String comment) {
++        this(fields, primaryKeys, comment, new LinkedHashMap<>());
++    }
++
++    public CdcSchema(
++            List<DataField> fields,
++            List<String> primaryKeys,
++            @Nullable String comment,
++            Map<String, String> options) {
+         this.fields = fields;
+         this.primaryKeys = primaryKeys;
+         this.comment = comment;
++        this.options = options;
+     }
+ 
+     public List<DataField> fields() {
+@@ -63,6 +91,10 @@ public class CdcSchema implements Serializable {
+         return comment;
+     }
+ 
++    public Map<String, String> options() {
++        return options;
++    }
++
+     @Override
+     public boolean equals(Object o) {
+         if (this == o) {
+@@ -74,12 +106,13 @@ public class CdcSchema implements Serializable {
+         CdcSchema that = (CdcSchema) o;
+         return Objects.equals(fields, that.fields)
+                 && Objects.equals(primaryKeys, that.primaryKeys)
+-                && Objects.equals(comment, that.comment);
++                && Objects.equals(comment, that.comment)
++                && Objects.equals(options, that.options);
+     }
+ 
+     @Override
+     public int hashCode() {
+-        return Objects.hash(fields, primaryKeys, comment);
++        return Objects.hash(fields, primaryKeys, comment, options);
+     }
+ 
+     @Override
+@@ -91,6 +124,8 @@ public class CdcSchema implements Serializable {
+                 + primaryKeys
+                 + ", comment="
+                 + comment
++                + ", options="
++                + options
+                 + '}';
+     }
+ 
+@@ -108,6 +143,8 @@ public class CdcSchema implements Serializable {
+ 
+         @Nullable private String comment;
+ 
++        private final Map<String, String> options = new LinkedHashMap<>();
++
+         private final AtomicInteger highestFieldId = new AtomicInteger(-1);
+ 
+         public int getHighestFieldId() {
+@@ -181,6 +218,18 @@ public class CdcSchema implements Serializable {
+             return this;
+         }
+ 
++        /** Declares a single table option. */
++        public Builder option(String key, String value) {
++            this.options.put(key, value);
++            return this;
++        }
++
++        /** Declares table options, merged over any already declared. */
++        public Builder options(Map<String, String> options) {
++            this.options.putAll(options);
++            return this;
++        }
++
+         /** Returns the data type of the specified field. */
+         public DataType getFieldType(String fieldName) {
+             DataField field = columns.get(fieldName);
+@@ -190,7 +239,7 @@ public class CdcSchema implements Serializable {
+         /** Returns an instance of an unresolved {@link CdcSchema}. */
+         public CdcSchema build() {
+             List<DataField> fields = new ArrayList<>(columns.values());
+-            return new CdcSchema(fields, primaryKeys, comment);
++            return new CdcSchema(fields, primaryKeys, comment, options);
+         }
+     }
+ }
+diff --git a/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/MultiTableUpdatedDataFieldsProcessFunction.java b/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/MultiTableUpdatedDataFieldsProcessFunction.java
+index d10f6d9..07fc18c 100644
+--- a/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/MultiTableUpdatedDataFieldsProcessFunction.java
++++ b/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/MultiTableUpdatedDataFieldsProcessFunction.java
+@@ -90,15 +90,31 @@ public class MultiTableUpdatedDataFieldsProcessFunction
+         List<DataField> actualUpdatedDataFields =
+                 actualUpdatedDataFields(updatedSchema.f1.fields(), latestFields);
+ 
+-        if (actualUpdatedDataFields.isEmpty() && updatedSchema.f1.comment() == null) {
++        // PATCHED (lago): `&& options.isEmpty()` added.
++        //
++        // Without it, a schema change carrying ONLY options is dropped here. That does not affect
++        // picking annotations up in the first place — on the first record after a restart
++        // RichEventParser has an empty previousDataFields, so it re-emits every field, and this
++        // guard passes. It affects an annotation that CHANGES while the job runs: a source-side
++        // `ALTER TABLE ... TYPE numeric(30,5)` alters no Paimon field (it is STRING either way and
++        // stays STRING), so the option-only change was silently discarded and the table kept
++        // advertising the old type until the next restart or column addition.
++        if (actualUpdatedDataFields.isEmpty()
++                && updatedSchema.f1.comment() == null
++                && updatedSchema.f1.options().isEmpty()) {
+             return;
+         }
+ 
++        // PATCHED (lago): carry options through. actualUpdatedDataFields filters fields already
++        // committed; options need no such filter because extractSchemaChanges() diffs them
++        // against the committed schema itself.
+         CdcSchema actualUpdatedSchema =
+                 new CdcSchema(
+                         actualUpdatedDataFields,
+                         updatedSchema.f1.primaryKeys(),
+-                        updatedSchema.f1.comment());
++                        updatedSchema.f1.comment(),
++                        updatedSchema.f1.options());
++
+         for (SchemaChange schemaChange : extractSchemaChanges(schemaManager, actualUpdatedSchema)) {
+             applySchemaChange(schemaManager, schemaChange, tableId, actualUpdatedSchema);
+         }
+diff --git a/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/RichCdcMultiplexRecord.java b/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/RichCdcMultiplexRecord.java
+index 5417cd9..10fec73 100644
+--- a/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/RichCdcMultiplexRecord.java
++++ b/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/RichCdcMultiplexRecord.java
+@@ -61,12 +61,16 @@ public class RichCdcMultiplexRecord implements Serializable {
+         return cdcSchema;
+     }
+ 
++    // PATCHED (lago): pass cdcSchema.options() instead of an empty map, so table properties
++    // declared by the CDC source survive into the created Paimon table. buildPaimonSchema()
++    // already does `builder.options(sourceSchema.options())` — this was the only thing standing
++    // between a source-declared option and the new table. Carries lago.source-type.<column>.
+     public Schema buildSchema() {
+         return new Schema(
+                 cdcSchema.fields(),
+                 Collections.emptyList(),
+                 cdcSchema.primaryKeys(),
+-                Collections.emptyMap(),
++                cdcSchema.options(),
+                 cdcSchema.comment());
+     }
+ 
+diff --git a/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/RichEventParser.java b/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/RichEventParser.java
+index c1ec3d3..e01b3ae 100644
+--- a/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/RichEventParser.java
++++ b/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/RichEventParser.java
+@@ -33,6 +33,10 @@ public class RichEventParser implements EventParser<RichCdcRecord> {
+ 
+     private String previousComment;
+ 
++    // PATCHED (lago): remember options we have already emitted, so an unchanged option does not
++    // produce a SchemaChange on every single record.
++    private final java.util.Map<String, String> previousOptions = new java.util.HashMap<>();
++
+     @Override
+     public void setRawEvent(RichCdcRecord rawEvent) {
+         this.record = rawEvent;
+@@ -60,6 +64,19 @@ public class RichEventParser implements EventParser<RichCdcRecord> {
+             change.comment(recordedSchema.comment());
+             hasChange = true;
+         }
++
++        // PATCHED (lago): propagate changed/new table options, mirroring the field diff above.
++        // Only DIFFERENCES are emitted; extractSchemaChanges() diffs again against the committed
++        // schema, so a restart that repopulates this map costs at most one no-op pass. An
++        // option-only change counts as a change, else 1.4's `hasChange ? ... : null` drops it.
++        for (java.util.Map.Entry<String, String> entry : recordedSchema.options().entrySet()) {
++            if (!entry.getValue().equals(previousOptions.get(entry.getKey()))) {
++                previousOptions.put(entry.getKey(), entry.getValue());
++                change.option(entry.getKey(), entry.getValue());
++                hasChange = true;
++            }
++        }
++
+         return hasChange ? change.build() : null;
+     }
+ 
+diff --git a/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/UpdatedDataFieldsProcessFunctionBase.java b/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/UpdatedDataFieldsProcessFunctionBase.java
+index 6f74a34..e7edbbc 100644
+--- a/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/UpdatedDataFieldsProcessFunctionBase.java
++++ b/paimon-flink/paimon-flink-cdc/src/main/java/org/apache/paimon/flink/sink/cdc/UpdatedDataFieldsProcessFunctionBase.java
+@@ -152,6 +152,11 @@ public abstract class UpdatedDataFieldsProcessFunctionBase<I, O> extends Process
+             catalog.alterTable(identifier, schemaChange, false);
+         } else if (schemaChange instanceof SchemaChange.UpdateComment) {
+             catalog.alterTable(identifier, schemaChange, false);
++        } else if (schemaChange instanceof SchemaChange.SetOption) {
++            // PATCHED (lago): table options are now a CDC-source-declarable channel; see
++            // CdcSchema. Without this branch the else below throws
++            // UnsupportedOperationException and kills the job.
++            catalog.alterTable(identifier, schemaChange, false);
+         } else {
+             throw new UnsupportedOperationException(
+                     "Unsupported schema change class "
+@@ -406,6 +411,24 @@ public abstract class UpdatedDataFieldsProcessFunctionBase<I, O> extends Process
+             // update table comment
+             result.add(SchemaChange.updateComment(updatedSchema.comment()));
+         }
++
++        // PATCHED (lago): set table options the CDC source declared and the committed schema
++        // does not already carry. This is what keeps lago.source-type.<column> correct as the
++        // source table evolves — a column added tomorrow gets its annotation on the same
++        // schema change that adds the column, with no backfill and no re-ingest.
++        //
++        // Deliberately additive: an option present on the table but absent from the source
++        // schema is LEFT ALONE, never removed. The source declares only its own keys; the rest
++        // of the option map is the table's own configuration (bucket, changelog-producer,
++        // snapshot.time-retained, ...) supplied via --table_conf at create time, and removing
++        // those would reconfigure the table out from under the running writer.
++        Map<String, String> oldOptions = oldTableSchema.options();
++        for (Map.Entry<String, String> option : updatedSchema.options().entrySet()) {
++            if (!option.getValue().equals(oldOptions.get(option.getKey()))) {
++                result.add(SchemaChange.setOption(option.getKey(), option.getValue()));
++            }
++        }
++
+         return result;
+     }
+ 

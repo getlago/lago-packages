@@ -3,8 +3,10 @@
 # Job. Replaces `flink:1.20.5-java17`, which is Ubuntu-based.
 #
 # Flink comes from the Lago overlay (packages/flink-1.20.yaml), as in
-# rev-rec-flink-base. The consumer Dockerfile adds the Paimon, Kafka and JDBC
-# jars to /opt/flink/lib with `ADD --checksum`, so it needs no download tool.
+# rev-rec-flink-base, and so does Paimon (packages/paimon-flink-1.20.yaml):
+# the bundle and action jar built from source, already in /opt/flink/lib. The
+# consumer Dockerfile adds the Kafka and JDBC jars with `ADD --checksum`, so
+# it needs no download tool.
 contents:
   repositories:
     - https://packages.wolfi.dev/os
@@ -20,6 +22,8 @@ contents:
     # Pulls bash, busybox, gettext, jemalloc and openjdk-17-jre. The leg-3
     # tools are compiled for Java 17 (flink-paimon-build).
     - flink-1.20
+    # paimon-flink-1.20 and paimon-flink-action in /opt/flink/lib.
+    - paimon-flink-1.20
 
 # Same uid/gid as the upstream image, so checkpoints and savepoints written by
 # the old image stay readable, and the operator's defaults still apply.

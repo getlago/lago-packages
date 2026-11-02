@@ -44,6 +44,9 @@ jobs:
     # install the melange binary on the runner instead and invoke it directly.
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The push diff against github.event.before needs the history.
+          fetch-depth: 0
 
       - name: Install melange
         uses: chainguard-dev/actions/setup-melange@v1.6.40
@@ -76,9 +79,9 @@ jobs:
       - name: Build the packages
         env:
           # Empty on push events; set only when workflow_dispatch names one
-          # recipe. Every recipe is cheap enough to rebuild that a push does not
-          # bother diffing — melange rewrites the apk in place either way.
+          # recipe.
           PACKAGE: ${{ inputs.package }}
+          BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           if [ -n "$PACKAGE" ]; then
@@ -88,16 +91,39 @@ jobs:
               ls packages/*.yaml 2>/dev/null || echo "(no recipes)"
               exit 1
             fi
+          elif [ "${{ github.event_name }}" = push ] \
+            && [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ] \
+            && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null \
+            && git diff --quiet "$BEFORE" HEAD -- .github/workflows/build-packages.yaml; then
+            # A push rebuilds only the recipes it touched: packages/<name>.yaml
+            # or a file under packages/<name>/ (its patches). paimon-flink-1.20
+            # is a Maven build of Paimon, too slow to rerun on every recipe
+            # change. A push that changes this workflow, or whose base commit
+            # is unknown, rebuilds every recipe.
+            mapfile -t recipes < <(
+              git diff --name-only "$BEFORE" HEAD -- packages \
+                | sed -n 's|^packages/\([^/]*\)\.yaml$|\1|p; s|^packages/\([^/]*\)/.*|\1|p' \
+                | sort -u \
+                | while read -r name; do
+                    if [ -f "packages/${name}.yaml" ]; then echo "packages/${name}.yaml"; fi
+                  done
+            )
           else
             recipes=(packages/*.yaml)
           fi
+          echo "Recipes: ${recipes[*]:-(none)}"
 
           for recipe in "${recipes[@]}"; do
             [ -e "$recipe" ] || continue
+            # A recipe's patches live in packages/<name>/; melange copies that
+            # directory into the build workspace.
+            source_dir=()
+            if [ -d "${recipe%.yaml}" ]; then source_dir=(--source-dir "${recipe%.yaml}"); fi
             echo "::group::melange build $recipe (${{ matrix.arch }})"
             melange build "$recipe" \
               --arch ${{ matrix.arch }} \
               --signing-key lago-signing.rsa \
+              "${source_dir[@]}" \
               --out-dir out
             echo "::endgroup::"
           done
