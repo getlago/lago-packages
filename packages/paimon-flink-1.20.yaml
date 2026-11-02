@@ -168,9 +168,29 @@ pipeline:
         sed -i "s|:${old}\$|:${v}|" "$mod/src/main/resources/META-INF/NOTICE"
         if grep -q ":${old}$" "$mod/src/main/resources/META-INF/NOTICE"; then exit 1; fi
       done
-      # guava 33 depends on failureaccess 1.0.3 (30.1.1 used 1.0.1).
-      sed -i 's|^- com.google.guava:failureaccess:.*$|- com.google.guava:failureaccess:1.0.3|' \
-        paimon-shade-guava-30/src/main/resources/META-INF/NOTICE
+      # NOTICE entries a version swap cannot know (failureaccess, new epoll
+      # classifiers) come from the resolved dependencies.
+      for mod in paimon-shade-guava-30 paimon-shade-netty-4; do
+        mvn -B -ntp -q dependency:list -pl "$mod" -DincludeScope=runtime \
+          -DoutputFile="${PWD}/deps-$mod.txt" -Dmaven.repo.local="${PWD}/../.m2"
+      done
+      fa="$(awk '$1 ~ /^com[.]google[.]guava:failureaccess:jar:/ {split($1, a, ":"); print a[4]}' deps-paimon-shade-guava-30.txt)"
+      test -n "$fa"
+      notice=paimon-shade-guava-30/src/main/resources/META-INF/NOTICE
+      sed -i "s|^- com.google.guava:failureaccess:.*$|- com.google.guava:failureaccess:${fa}|" "$notice"
+      grep -qxF -- "- com.google.guava:failureaccess:${fa}" "$notice"
+      notice=paimon-shade-netty-4/src/main/resources/META-INF/NOTICE
+      classifiers="$(awk '$1 ~ /^io[.]netty:netty-transport-native-epoll:jar:/ {split($1, a, ":"); print a[4]}' deps-paimon-shade-netty-4.txt)"
+      test -n "$classifiers"
+      for c in $classifiers; do
+        line="- io.netty:netty-transport-native-epoll:${c}:${{vars.netty}}"
+        if ! grep -qxF -- "$line" "$notice"; then
+          last="$(grep -n '^- io.netty:netty-transport-native-epoll:' "$notice" | tail -1 | cut -d: -f1)"
+          test -n "$last"
+          sed -i "${last}a\\${line}" "$notice"
+        fi
+        grep -qxF -- "$line" "$notice"
+      done
 
       # The root pom's maven-shade-plugin was moved to a current release by the
       # jackson step above.
@@ -234,7 +254,10 @@ pipeline:
       test -f "../.m2/com/google/guava/guava/${{vars.guava}}/guava-${{vars.guava}}.jar"
       shade_guava="../.m2/org/apache/paimon/paimon-shade-guava-30/${{vars.guava}}-${{vars.shade-suffix}}-${{vars.shade-version}}/paimon-shade-guava-30-${{vars.guava}}-${{vars.shade-suffix}}-${{vars.shade-version}}.jar"
       cls=org/apache/paimon/shade/guava30/com/google/common/collect/ImmutableList.class
-      test "$(unzip -p "$shade_guava" "$cls" | sha256sum)" = "$(unzip -p "$bundle" "$cls" | sha256sum)"
+      unzip -p "$shade_guava" "$cls" > shade.class
+      unzip -p "$bundle" "$cls" > bundle.class
+      test -s shade.class && test -s bundle.class
+      cmp -s shade.class bundle.class
       unzip -p "$bundle" META-INF/io.netty.versions.properties \
         | grep -qx 'netty-all.version=${{vars.netty}}'
       # The patched classes are in.
