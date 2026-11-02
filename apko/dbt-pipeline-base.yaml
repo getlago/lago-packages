@@ -23,10 +23,12 @@ contents:
     # gives /bin/sh without busybox and its applets.
     - bash
     - bash-binsh
-    # mktemp, seq, sort, wc, date, xargs -P, sed.
+    # mktemp, seq, sort, wc, date, xargs -P, sed, grep (rt_parity, rt_schema_sync,
+    # rt_install).
     - coreutils
     - findutils
     - sed
+    - grep
     # pg_dump and psql. 18: Wolfi ships the CVE fixes there first (17.11 is
     # unpublished). Its dumps restore into our PG 15/16 servers like 17's.
     - postgresql-18-client
