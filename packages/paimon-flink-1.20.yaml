@@ -2,19 +2,19 @@
 #
 # The released bundle on Maven Central carries jackson-databind 2.14.x (two
 # copies: paimon-shade's relocated one and avro's, which paimon-format shades
-# with its pom.properties), httpcore5 5.3.6 / httpclient5 5.5.1 (paimon-api,
-# REST catalog) and protobuf-java 3.19.6 (paimon-format, ORC). No Paimon
-# release moves any of them, so this builds from the release tag instead:
+# with its pom.properties), paimon-shade's guava 30.1.1-jre and netty
+# 4.1.100.Final, httpcore5 5.3.6 / httpclient5 5.5.1 (paimon-api, REST
+# catalog) and protobuf-java 3.19.6 (paimon-format, ORC). No Paimon release
+# moves any of them, so this builds from the release tag instead:
 #
-#   1. apache/paimon-shade's jackson module, rebuilt on a current jackson under
-#      a `-lago<n>` version so it can never pass for the Apache artifact. It is
-#      installed into a Maven repository local to this build and not shipped
-#      on its own: the bundle shades it.
-#   2. apache/paimon at the release tag, against that shade, with the jackson
-#      BOM and the httpcomponents and protobuf versions set through Maven
-#      properties, and
-#      with our source patches (debezium parsing, CDC table options, the
-#      UpdateColumnNullability branch).
+#   1. apache/paimon-shade's jackson, guava and netty modules, rebuilt on
+#      current versions under a `-lago<n>` version so they can never pass for
+#      the Apache artifacts. They are installed into a Maven repository local
+#      to this build and not shipped on their own: the bundle shades them.
+#   2. apache/paimon at the release tag, against those shades, with the
+#      jackson BOM and the httpcomponents and protobuf versions set through
+#      Maven properties, and with our source patches (debezium parsing, CDC
+#      table options, the UpdateColumnNullability branch).
 #
 # Nothing here opens or rewrites a published jar: every jar in the apk is the
 # output of `mvn package`.
@@ -24,10 +24,11 @@
 package:
   name: paimon-flink-1.20
   version: 1.4.2
-  epoch: 0
+  epoch: 1
   description: >-
     Apache Paimon Flink 1.20 bundle and action jar, built from source with
-    current jackson and httpcomponents and Lago's CDC patches. Lago build.
+    current jackson, guava, netty and httpcomponents and Lago's CDC
+    patches. Lago build.
   copyright:
     - license: Apache-2.0
   dependencies:
@@ -75,10 +76,18 @@ vars:
   #   ships no pom.properties, so scanners cannot read this version inside
   #   the bundle; the check below reads it off the class.
   #
+  #   guava 33.7.2-jre (2026-09-29). 30.1.1-jre has CVE-2020-8908,
+  #   CVE-2023-2976 and CVE-2026-102554. Still Java 8 bytecode.
+  guava: 33.7.2-jre
+  #   netty 4.1.139.Final (2026-10-06), latest of 4.1, which is still patched.
+  #   4.1.100.Final has 30+ advisories across codec-http, codec-http2,
+  #   handler and common. 4.2 is a new minor with API changes: not needed.
+  netty: 4.1.139.Final
+  #
   # NO SCANNER SEES these shaded copies (no pom.properties in the bundle), so
-  # a person must follow their advisories by hand: protobuf-java (above), and
-  # paimon-shade's guava 30.1.1-jre, caffeine 2.9.3 and netty 4.1.100.Final
-  # (paimon.shade.*.version at the release tag). A CycloneDX SBOM from
+  # a person must follow their advisories by hand: protobuf-java, guava and
+  # netty (above), and paimon-shade's caffeine 2.9.3, left as is: it is the
+  # last 2.x, has no advisory, and 3.x needs Java 11. A CycloneDX SBOM from
   # cyclonedx-maven-plugin was tested and left out: Trivy reads it, but it
   # lists every compile-scope dependency (110 the bundle does not hold, e.g.
   # hadoop-common 2.8.5, zookeeper 3.4.6), so the overlay gate would fail on
@@ -88,7 +97,7 @@ vars:
   shade-version: 0.8.0
   shade-commit: b2cec3119bc64c1d98cfc02d3d00ce0c5bd4e9cc
   paimon-commit: ac223f47d916f4c8e9c07fd1745db448e4e7d0d8
-  # Bump when the shade build changes with no jackson bump.
+  # Bump when the shade build changes with no version bump.
   shade-suffix: lago1
   # Latest release (3.6.2). Paimon itself already builds with 3.5.3.
   maven-shade-plugin: 3.6.2
@@ -138,6 +147,57 @@ pipeline:
       mvn -B -ntp install -DskipTests \
         -Dmaven.repo.local="${PWD}/../../.m2"
 
+  - name: Build paimon-shade-guava-30 and paimon-shade-netty-4 on the pinned versions
+    working-directory: paimon-shade
+    runs: |
+      set -eu
+      # Both modules take their version from a root property:
+      # `${guava.version}-<shade>`. Set the property and add the -lago suffix to
+      # the module version, then make the NOTICE list what is bundled. The
+      # greps fail the build if the release tag no longer looks like this.
+      for lib in guava netty; do
+        case "$lib" in
+          guava) mod=paimon-shade-guava-30; v="${{vars.guava}}" ;;
+          netty) mod=paimon-shade-netty-4;  v="${{vars.netty}}" ;;
+        esac
+        old="$(sed -n "s|^ *<${lib}.version>\(.*\)</${lib}.version>$|\1|p" pom.xml)"
+        test -n "$old"
+        sed -i "s|<${lib}.version>${old}</${lib}.version>|<${lib}.version>${v}</${lib}.version>|" pom.xml
+        sed -i "s|<version>\${${lib}.version}-${{vars.shade-version}}</version>|<version>\${${lib}.version}-${{vars.shade-suffix}}-${{vars.shade-version}}</version>|" "$mod/pom.xml"
+        grep -q "<version>\${${lib}.version}-${{vars.shade-suffix}}-${{vars.shade-version}}</version>" "$mod/pom.xml"
+        sed -i "s|:${old}\$|:${v}|" "$mod/src/main/resources/META-INF/NOTICE"
+        if grep -q ":${old}$" "$mod/src/main/resources/META-INF/NOTICE"; then exit 1; fi
+      done
+      # NOTICE entries a version swap cannot know (failureaccess, new epoll
+      # classifiers) come from the resolved dependencies.
+      for mod in paimon-shade-guava-30 paimon-shade-netty-4; do
+        mvn -B -ntp -q dependency:list -pl "$mod" -DincludeScope=runtime \
+          -DoutputFile="${PWD}/deps-$mod.txt" -Dmaven.repo.local="${PWD}/../.m2"
+      done
+      fa="$(awk '$1 ~ /^com[.]google[.]guava:failureaccess:jar:/ {split($1, a, ":"); print a[4]}' deps-paimon-shade-guava-30.txt)"
+      test -n "$fa"
+      notice=paimon-shade-guava-30/src/main/resources/META-INF/NOTICE
+      sed -i "s|^- com.google.guava:failureaccess:.*$|- com.google.guava:failureaccess:${fa}|" "$notice"
+      grep -qxF -- "- com.google.guava:failureaccess:${fa}" "$notice"
+      notice=paimon-shade-netty-4/src/main/resources/META-INF/NOTICE
+      classifiers="$(awk '$1 ~ /^io[.]netty:netty-transport-native-epoll:jar:/ {split($1, a, ":"); print a[4]}' deps-paimon-shade-netty-4.txt)"
+      test -n "$classifiers"
+      for c in $classifiers; do
+        line="- io.netty:netty-transport-native-epoll:${c}:${{vars.netty}}"
+        if ! grep -qxF -- "$line" "$notice"; then
+          last="$(grep -n '^- io.netty:netty-transport-native-epoll:' "$notice" | tail -1 | cut -d: -f1)"
+          test -n "$last"
+          sed -i "${last}a\\${line}" "$notice"
+        fi
+        grep -qxF -- "$line" "$notice"
+      done
+
+      # The root pom's maven-shade-plugin was moved to a current release by the
+      # jackson step above.
+      mvn -B -ntp install -DskipTests \
+        -pl paimon-shade-guava-30,paimon-shade-netty-4 \
+        -Dmaven.repo.local="${PWD}/../.m2"
+
   # packages/paimon-flink-1.20/, copied into the workspace root by
   # build-packages.yaml (--source-dir); the paths are relative to paimon/.
   - uses: patch
@@ -159,6 +219,8 @@ pipeline:
         -pl paimon-flink/paimon-flink-1.20,paimon-flink/paimon-flink-action -am \
         -Dmaven.repo.local="${PWD}/../.m2" \
         -Dpaimon.shade.jackson.version="${{vars.jackson}}-${{vars.shade-suffix}}" \
+        -Dpaimon.shade.guava.version="${{vars.guava}}-${{vars.shade-suffix}}" \
+        -Dpaimon.shade.netty.version="${{vars.netty}}-${{vars.shade-suffix}}" \
         -Dlago.jackson.version="${{vars.jackson}}" \
         -Dapache.hc.core.version="${{vars.httpcore}}" \
         -Dapache.hc.client.version="${{vars.httpclient}}" \
@@ -185,6 +247,19 @@ pipeline:
           org.apache.paimon.shade.com.google.protobuf.RuntimeVersion \
         | sed -nE 's/.* (MAJOR|MINOR|PATCH) = ([0-9]+);/\2/p' | paste -sd. -)"
       test "$pb" = "${{vars.protobuf}}"
+      # No guava version file survives shading (paimon-shade strips
+      # META-INF/maven). The shade step set and checked guava.version; check
+      # that guava jar was resolved, and that the bundle's guava classes are
+      # byte-identical to the -lago shade jar's.
+      test -f "../.m2/com/google/guava/guava/${{vars.guava}}/guava-${{vars.guava}}.jar"
+      shade_guava="../.m2/org/apache/paimon/paimon-shade-guava-30/${{vars.guava}}-${{vars.shade-suffix}}-${{vars.shade-version}}/paimon-shade-guava-30-${{vars.guava}}-${{vars.shade-suffix}}-${{vars.shade-version}}.jar"
+      cls=org/apache/paimon/shade/guava30/com/google/common/collect/ImmutableList.class
+      unzip -p "$shade_guava" "$cls" > shade.class
+      unzip -p "$bundle" "$cls" > bundle.class
+      test -s shade.class && test -s bundle.class
+      cmp -s shade.class bundle.class
+      unzip -p "$bundle" META-INF/io.netty.versions.properties \
+        | grep -qx 'netty-all.version=${{vars.netty}}'
       # The patched classes are in.
       unzip -l "$bundle" | grep -q 'org/apache/paimon/flink/sink/cdc/CdcSchema.class'
       unzip -p "$bundle" org/apache/paimon/flink/action/cdc/format/debezium/DebeziumJsonRecordParser.class \
