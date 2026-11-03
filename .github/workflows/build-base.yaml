@@ -324,7 +324,7 @@ jobs:
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
-          json=$(.github/scripts/base-cve-diff.sh "$IMAGE:latest" image-x86_64.tar)
+          json=$(.github/scripts/base-cve-diff.sh "$IMAGE:latest" image-x86_64.tar ".trivyignore.d/$IMAGE_NAME")
           echo "$json"
           echo "json=$json" >> "$GITHUB_OUTPUT"
 
@@ -476,7 +476,8 @@ jobs:
           # No CVE result (a scan step that did not run) fails open: the consumers refresh.
           json=$(jq -c --arg run "$RUN" --arg image "$IMAGE_NAME" \
             '{run: $run, fixes_cves: (if has("fixes_cves") then .fixes_cves else true end),
-              fixed: (.fixed // []), max_severity: (.max_severity // "UNKNOWN"), bases: [$image]}' <<<"${CVES:-{\}}")
+              fixed: (.fixed // []), max_severity: (.max_severity // "UNKNOWN")}
+             | .bases = (if .fixes_cves then [$image] else [] end)' <<<"${CVES:-{\}}")
           echo "$json"
           echo "json=$json" >> "$GITHUB_OUTPUT"
 

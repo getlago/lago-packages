@@ -220,9 +220,12 @@ jobs:
                 jq -nc --arg image "$(basename "$f")" '{fixes_cves: true, image: $image}'
             done | jq -sc --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" '
               def fixes: if has("fixes_cves") then .fixes_cves else true end;
-              {run: $run, fixes_cves: (map(fixes) | any),
-               fixed: (map(.fixed // []) | add // [] | unique | .[:30]),
-               bases: map(select(fixes) | .image)}')
+              ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN", "NONE"] as $order
+              | {run: $run, fixes_cves: (map(fixes) | any),
+                 fixed: (map(.fixed // []) | add // [] | unique | .[:30]),
+                 max_severity: (map(.max_severity // (if fixes then "UNKNOWN" else "NONE" end)) as $s
+                   | first($order[] | select(. as $o | $s | index($o))) // "NONE"),
+                 bases: map(select(fixes) | .image)}')
           echo "payload=$payload" >>"$GITHUB_OUTPUT"
 
       - name: Fail on images that never started
