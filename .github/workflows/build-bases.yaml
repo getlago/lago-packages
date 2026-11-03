@@ -124,6 +124,7 @@ jobs:
       actions: write
     outputs:
       changed: ${{ steps.summary.outputs.changed }}
+      payload: ${{ steps.summary.outputs.payload }}
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -212,6 +213,17 @@ jobs:
             echo "| \`$image\` | [$result]($url) | $published |" >>"$GITHUB_STEP_SUMMARY"
           done < <(jq -c 'sort_by(.displayTitle) | .[]' runs.json 2>/dev/null)
           echo "changed=$changed" >>"$GITHUB_OUTPUT"
+          # Each marker holds its image's CVE diff. An empty or unreadable one fails open.
+          payload=$(for f in changed/*/*; do
+              [[ -f $f ]] || continue
+              jq -ce --arg image "$(basename "$f")" '. + {image: $image}' "$f" 2>/dev/null ||
+                jq -nc --arg image "$(basename "$f")" '{fixes_cves: true, image: $image}'
+            done | jq -sc --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" '
+              def fixes: if has("fixes_cves") then .fixes_cves else true end;
+              {run: $run, fixes_cves: (map(fixes) | any),
+               fixed: (map(.fixed // []) | add // [] | unique | .[:30]),
+               bases: map(select(fixes) | .image)}')
+          echo "payload=$payload" >>"$GITHUB_OUTPUT"
 
       - name: Fail on images that never started
         if: ${{ !cancelled() }}
@@ -243,4 +255,4 @@ jobs:
           token: ${{ secrets.BASE_UPDATE_DISPATCH_TOKEN }}
           repository: ${{ matrix.repository }}
           event-type: base-updated
-          client-payload: '{"run": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}'
+          client-payload: ${{ needs.dispatch.outputs.payload }}

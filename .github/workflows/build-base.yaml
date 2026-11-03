@@ -54,6 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.diff.outputs.changed }}
+      cves: ${{ steps.cves.outputs.json }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -316,6 +317,17 @@ jobs:
             echo "::notice::${{ env.IMAGE_NAME }} is unchanged, nothing to publish"
           fi
 
+      - name: Compare OS CVEs with the published :latest
+        # The consumers refresh at once only when the new base fixes a CVE; else weekly.
+        if: steps.diff.outputs.changed == 'true'
+        id: cves
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          json=$(.github/scripts/base-cve-diff.sh "$IMAGE:latest" image-x86_64.tar)
+          echo "$json"
+          echo "json=$json" >> "$GITHUB_OUTPUT"
+
       - name: Push scan-clean per-arch images to GHCR
         # crane pushes the exact tarballs Trivy scanned — no rebuild, no
         # drift between the scan and what lands in the registry. The
@@ -405,7 +417,9 @@ jobs:
         # build-bases.yaml cannot read this run's outputs: it downloads this
         # marker to decide if the batch sends base-updated.
         if: steps.diff.outputs.changed == 'true'
-        run: mkdir -p changed && touch "changed/${{ env.IMAGE_NAME }}"
+        env:
+          CVES: ${{ steps.cves.outputs.json }}
+        run: mkdir -p changed && echo "$CVES" > "changed/${{ env.IMAGE_NAME }}"
 
       - name: Upload the change marker
         if: steps.diff.outputs.changed == 'true'
@@ -453,6 +467,19 @@ jobs:
           echo "send=$send" >>"$GITHUB_OUTPUT"
           echo "notify=$NOTIFY attempt=$GITHUB_RUN_ATTEMPT parent=$PARENT -> send=$send"
 
+      - name: Build the payload
+        id: payload
+        env:
+          CVES: ${{ needs.build.outputs.cves }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # No CVE result (a scan step that did not run) fails open: the consumers refresh.
+          json=$(jq -c --arg run "$RUN" --arg image "$IMAGE_NAME" \
+            '{run: $run, fixes_cves: (if has("fixes_cves") then .fixes_cves else true end),
+              fixed: (.fixed // []), max_severity: (.max_severity // "UNKNOWN"), bases: [$image]}' <<<"${CVES:-{\}}")
+          echo "$json"
+          echo "json=$json" >> "$GITHUB_OUTPUT"
+
       # Cross-repo `contents: write`; GITHUB_TOKEN cannot do it.
       - name: Dispatch base-updated
         if: env.HAS_TOKEN == 'true' && steps.gate.outputs.send == 'true'
@@ -461,4 +488,4 @@ jobs:
           token: ${{ secrets.BASE_UPDATE_DISPATCH_TOKEN }}
           repository: ${{ matrix.repository }}
           event-type: base-updated
-          client-payload: '{"run": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}'
+          client-payload: ${{ steps.payload.outputs.json }}
