@@ -14,6 +14,7 @@ an SBOM, and every image is signed with cosign (keyless, via GitHub OIDC).
 | --- | --- | --- |
 | `ghcr.io/getlago/lago-api-base` | ruby-4.0, jemalloc, libpq, pdfcpu, git, postgresql-client, curl | runtime stage of `lago-api` |
 | `ghcr.io/getlago/lago-api-build` | ruby-4.0 + headers, build-base, rust, nodejs, clang-19 | build stage of `lago-api` |
+| `ghcr.io/getlago/lago-allinone-base` | ruby-4.0, jemalloc, libpq, pdfcpu, postgresql-18 + pg-partman-18, valkey-9.1, nginx, tini, openssl, nonroot, `/data` owned by nonroot | runtime stage of the all-in-one image `getlago/lago` (lago `docker/Dockerfile`); its build stages use `lago-api-build` and `lago-front-build` |
 | `ghcr.io/getlago/lago-front-base` | nginx, unprivileged (binds an unprivileged port) | runtime stage of `lago-front` |
 | `ghcr.io/getlago/lago-front-build` | nodejs-24, pnpm | build stage of `lago-front` |
 | `ghcr.io/getlago/data-agent-base` | python-3.13, nonroot | runtime stage of `lago-data-agent` |

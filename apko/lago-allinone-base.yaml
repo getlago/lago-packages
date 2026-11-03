@@ -1,0 +1,83 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - tzdata
+    # runner.sh is a bash script (associative arrays) and shells out to
+    # sed, mkdir and friends.
+    - bash
+    - busybox
+    # PID 1: forwards SIGTERM to runner.sh, which stops Postgres cleanly, and
+    # reaps the zombies of the processes foreman leaves behind.
+    - tini
+    # The test action and users' healthchecks curl /health.
+    - curl
+    # runner.sh generates the secrets of a first start (`openssl rand`,
+    # `openssl genrsa`).
+    - openssl
+    # lago-api runtime, same set as lago-api-base.
+    - ruby-4.0
+    - libpq
+    - jemalloc
+    - git
+    - pdfcpu
+    # Embedded Postgres. 18, not the 17 of the Debian image: Wolfi ships
+    # pg_partman for 14, 15 and 18 only. The Debian image kept its cluster in
+    # the container layer, not in /data, so no volume holds a 17 cluster.
+    - postgresql-18
+    - postgresql-18-client
+    # btree_gin and the other contrib extensions that lago-api's structure.sql
+    # creates. Debian's postgresql-17 bundled them.
+    - postgresql-18-contrib
+    # Optional for lago-api: its migrations partition enriched_events when the
+    # extension is present, and skip it when it is not.
+    - pg-partman-18
+    # Embedded Redis. Wolfi ships no Redis since its licence change; Valkey is
+    # the protocol-compatible fork. lago-api and Sidekiq only see REDIS_URL.
+    - valkey-9.1
+    - valkey-9.1-cli
+    # Serves the front and binds port 80 as nonroot. Docker sets
+    # net.ipv4.ip_unprivileged_port_start=0 in every container by default.
+    - nginx
+
+accounts:
+  groups:
+    - groupname: nonroot
+      gid: 65532
+  users:
+    - username: nonroot
+      uid: 65532
+      gid: 65532
+  run-as: 65532
+
+paths:
+  # The volume of the all-in-one image: Postgres cluster, Valkey AOF, .env.
+  # Docker copies the ownership of an image directory into a new named
+  # volume, so a fresh `-v lago_data:/data` belongs to nonroot too.
+  - path: /data
+    type: directory
+    permissions: 0o755
+    uid: 65532
+    gid: 65532
+
+environment:
+  BUNDLE_WITHOUT: "development test"
+  PATH: /usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
+archs:
+  - x86_64
+  - aarch64
+
+work-dir: /app
+
+# No `entrypoint:`, like lago-api-base. The consumer Dockerfile sets it to
+# tini + its runner, and restates it, so a change here cannot reach it.
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.licenses: AGPL-3.0
+  org.opencontainers.image.description: Hardened Wolfi-based runtime image for the all-in-one Lago image (getlago/lago)
