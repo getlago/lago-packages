@@ -229,6 +229,8 @@ pipeline:
       annotations="$(sed -n 's|.*<jackson.version.annotations>\(.*\)</jackson.version.annotations>.*|\1|p' \
         "../.m2/com/fasterxml/jackson/jackson-bom/${{vars.jackson}}/jackson-bom-${{vars.jackson}}.pom")"
       test -n "$annotations"
+      # The check step reads it back from here: one source for both steps.
+      printf '%s\n' "$annotations" > ../jackson-annotations.version
       for pin in \
         "paimon-format com.fasterxml.jackson.core:jackson-core ${{vars.jackson}}" \
         "paimon-format com.fasterxml.jackson.core:jackson-databind ${{vars.jackson}}" \
@@ -306,8 +308,8 @@ pipeline:
       # classes are checked above).
       unzip -p "$bundle" META-INF/NOTICE > notice.txt
       test -s notice.txt
-      annotations_v="$(sed -n 's|.*<jackson.version.annotations>\(.*\)</jackson.version.annotations>.*|\1|p' \
-        "../.m2/com/fasterxml/jackson/jackson-bom/${{vars.jackson}}/jackson-bom-${{vars.jackson}}.pom")"
+      test -s ../jackson-annotations.version
+      annotations_v="$(cat ../jackson-annotations.version)"
       test -n "$annotations_v"
       pinned() {
         ver="$(printf '%s' "$2" | sed 's/[.]/[.]/g')"
@@ -346,5 +348,5 @@ test:
         test -f /opt/flink/lib/paimon-flink-1.20-${{package.version}}.jar
         test -f /opt/flink/lib/paimon-flink-action-${{package.version}}.jar
         unzip -p /opt/flink/lib/paimon-flink-1.20-${{package.version}}.jar \
-          META-INF/maven/com.fasterxml.jackson.core/jackson-databind/pom.properties \
-          | grep -qx 'version=${{vars.jackson}}'
+          META-INF/maven/com.fasterxml.jackson.core/jackson-databind/pom.properties > databind.properties
+        grep -qx 'version=${{vars.jackson}}' databind.properties
