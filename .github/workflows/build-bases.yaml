@@ -206,8 +206,20 @@ jobs:
             result=$(jq -r '.conclusion // "" | if . == "" then "not finished" else . end' <<<"$run")
             image=$(jq -r '.displayTitle | sub(" \\(batch .*$"; "")' <<<"$run")
             published=no
-            if [[ $result == success ]] && gh run download "$id" -n "changed-$image" -D "changed/$image" 2>/dev/null; then
-              published=yes changed=true
+            if [[ $result == success ]]; then
+              # No marker = nothing published. A download that fails for another reason fails open.
+              for try in 1 2 3; do
+                if err=$(gh run download "$id" -n "changed-$image" -D "changed/$image" 2>&1); then
+                  published=yes changed=true; break
+                elif grep -q "no artifact matches\|no valid artifacts" <<<"$err"; then
+                  break
+                elif [[ $try == 3 ]]; then
+                  echo "::warning title=$image::marker download failed, counting it as a CVE fix: $err"
+                  mkdir -p "changed/$image" && echo '{"fixes_cves": true}' >"changed/$image/$image"
+                  published=yes changed=true
+                fi
+                sleep $((try * 5))
+              done
             fi
             [[ $result == success ]] || echo "::warning title=$image::$result: $url"
             echo "| \`$image\` | [$result]($url) | $published |" >>"$GITHUB_STEP_SUMMARY"

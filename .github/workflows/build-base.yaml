@@ -321,10 +321,15 @@ jobs:
         # The consumers refresh at once only when the new base fixes a CVE; else weekly.
         if: steps.diff.outputs.changed == 'true'
         id: cves
+        # Advisory: a failure here never blocks the publish; the payload then fails open.
+        continue-on-error: true
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # The DB the gate scans just downloaded (trivy-action's default cache-dir).
+          TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
+          TRIVY_SKIP_DB: 'true'
         run: |
-          json=$(.github/scripts/base-cve-diff.sh "$IMAGE:latest" image-x86_64.tar ".trivyignore.d/$IMAGE_NAME")
+          json=$(.github/scripts/base-cve-diff.sh "$IMAGE:latest" image-x86_64.tar)
           echo "$json"
           echo "json=$json" >> "$GITHUB_OUTPUT"
 
