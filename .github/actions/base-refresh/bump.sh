@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Writes the new tags of one image (plan.sh JSON lines on stdin) into the
 # values files, then opens or updates its PR on base-refresh/<name>. The PR
-# body says what changed in the base and why (describe.sh).
+# body says what changed in the base and why (describe.sh). gate.sh skips a
+# rebuild that fixes no finding, unless a PR is already open.
 # Needs yq, jq, gh (GH_TOKEN with contents + pull-requests write), and crane
 # and trivy logged in to the registry.
 set -euo pipefail
@@ -38,7 +39,26 @@ if git diff --quiet; then
   echo "No tag to change." >&2
   exit 0
 fi
+
+BRANCH=base-refresh/$name
+TITLE="chore($name): rebuild on the fresh lago-packages base"
+# REST, not `gh pr view/edit`: those also read the PR's requested
+# reviewers, and a fine-grained token cannot read team reviewers (CODEOWNERS).
+REPO=${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}
+pr=$(gh api "repos/$REPO/pulls?head=${REPO%%/*}:$BRANCH&state=open" -q '.[0].number // empty')
+
+# A rebuild that fixes no finding opens no PR. An open PR is still updated.
+rc=0
+reason=$(gate.sh <<<"$pins") || rc=$?
+if [[ -z $pr && $rc == 10 ]]; then
+  echo "$name: $reason" >&2
+  jq -r --arg r "$reason" '"- `\(.name)`: `\(.old)` → `\(.tag)`: \($r)"' <<<"$pins" | sort -u >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
+  git checkout -q -- .
+  exit 0
+fi
 {
+  echo
+  echo "Gate: $reason."
   echo
   describe.sh <<<"$pins"
   echo
@@ -59,18 +79,12 @@ if (( $(wc -c <"$body") > 60000 )); then
   mv "$body.cut" "$body"
 fi
 
-BRANCH=base-refresh/$name
-TITLE="chore($name): rebuild on the fresh lago-packages base"
 # From main, whatever ref this run checked out. The edits carry over.
 git fetch -q origin main
 git checkout -B "$BRANCH" origin/main
 git commit -qam "$TITLE"
 git push --force origin "$BRANCH"
 
-# REST, not `gh pr view/edit`: those also read the PR's requested
-# reviewers, and a fine-grained token cannot read team reviewers (CODEOWNERS).
-REPO=${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}
-pr=$(gh api "repos/$REPO/pulls?head=${REPO%%/*}:$BRANCH&state=open" -q '.[0].number // empty')
 if [[ -n $pr ]]; then
   gh api -X PATCH "repos/$REPO/pulls/$pr" -F "body=@$body" -q .html_url
 else
