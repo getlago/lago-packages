@@ -108,8 +108,8 @@ flowchart TD
     PL["plan.sh<br/>pins not on the newest base"]
     DI["dispatch.sh<br/>lago-api pin has a builder"]
     BR["base-rebuild.yaml (builder)<br/>calls rebuild.yaml with the lago-api Dockerfile<br/>push &lt;sha&gt;-base.&lt;digest12&gt;"]
-    RF["refresh job<br/>Trivy, bump.sh, describe.sh"]
-    PR["PR base-refresh/api<br/>tag diff, base packages, fixed CVEs"]
+    RF["refresh job, one per image<br/>Trivy, section.sh, describe.sh"]
+    PR["pr job, bump.sh: one PR base-refresh/all<br/>summary table, then per image: tag diff, base packages, fixed CVEs"]
     T2 --> RB --> PL --> DI
     RF --> PR
   end
@@ -238,7 +238,7 @@ in one PR.
 
 | Field | |
 | --- | --- |
-| `name` | image name, and the PR branch `base-refresh/<name>` |
+| `name` | image name: its section in the daily PR on `base-refresh/all` |
 | `base` | the `ghcr.io/getlago/<base>` the image runs on |
 | `file`, `path` | the YAML file and the yq path of the tag, or of a full `repository:tag` |
 | `repository` | full image repository (or `<ecr input>/<name>`) |

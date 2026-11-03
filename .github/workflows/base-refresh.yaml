@@ -1,15 +1,16 @@
 name: Base refresh
 
 # Rebuilds the deployed commit of each pinned image on the newest
-# lago-packages base, then opens one PR per image with the new tag, in the
-# calling repository: the one that holds the tags (lago-infrastructure,
+# lago-packages base, then opens ONE PR with every new tag (base-refresh/all),
+# in the calling repository: the one that holds the tags (lago-infrastructure,
 # lago-deploy). Pins format: see README.md.
 #
 # plan.sh lists the stale pins. A pin with a `builder` is rebuilt by that
 # repository (its base-rebuild.yaml calls rebuild.yaml, with its own secrets
 # and registry access): dispatch.sh starts it and waits. A pin without one is
-# built here, for an image that needs no secret. bump.sh opens the PR, with
-# the base package changes and the fixed CVEs (describe.sh) in its body.
+# built here, for an image that needs no secret. Each refresh job scans its
+# image and writes its PR section (section.sh, describe.sh); the pr job applies
+# every tag and opens one PR (bump.sh).
 on:
   workflow_call:
     inputs:
@@ -161,7 +162,7 @@ jobs:
         run: dispatch.sh
 
   # One job per image, also when a build failed: a failed image has no tag,
-  # so only its own job fails.
+  # so only its own job fails, and the PR goes out without it.
   refresh:
     needs: [scripts, plan, build, dispatch]
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.pins != '[]' }}
@@ -172,10 +173,6 @@ jobs:
       matrix:
         pins: ${{ fromJson(needs.plan.outputs.pins) }}
     steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.pr-token }}
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ inputs.ecr-role }}
@@ -202,13 +199,44 @@ jobs:
           path: .base-refresh
           sparse-checkout: .github/actions/base-refresh
       - run: echo "$GITHUB_WORKSPACE/.base-refresh/.github/actions/base-refresh" >>"$GITHUB_PATH"
+      - run: jq -c '.[]' <<<"$PINS" | section.sh "section/${{ matrix.pins[0].name }}"
+        env:
+          PINS: ${{ toJson(matrix.pins) }}
+          # The caller's event: set on a base-updated dispatch only.
+          TRIGGER_URL: ${{ github.event.client_payload.run }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: base-refresh-${{ matrix.pins[0].name }}
+          path: section/
+          retention-days: 7
+
+  # One PR for every image whose refresh job passed.
+  pr:
+    needs: [scripts, plan, refresh]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.pins != '[]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.pr-token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: base-refresh-*
+          path: ${{ runner.temp }}/sections
+          merge-multiple: true
+      - uses: actions/checkout@v7
+        with:
+          repository: getlago/lago-packages
+          ref: ${{ needs.scripts.outputs.sha }}
+          path: .base-refresh
+          sparse-checkout: .github/actions/base-refresh
+      - run: echo "$GITHUB_WORKSPACE/.base-refresh/.github/actions/base-refresh" >>"$GITHUB_PATH"
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          jq -c '.[]' <<<"$PINS" | bump.sh
+          bump.sh "$RUNNER_TEMP/sections"
         env:
-          PINS: ${{ toJson(matrix.pins) }}
+          PLANNED: ${{ toJson(fromJson(needs.plan.outputs.pins).*[0].name) }}
           GH_TOKEN: ${{ secrets.pr-token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          # The caller's event: set on a base-updated dispatch only.
-          TRIGGER_URL: ${{ github.event.client_payload.run }}
