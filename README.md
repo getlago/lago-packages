@@ -304,16 +304,19 @@ on:
       pr: {description: PR number, type: number, required: true}
 jobs:
   notes:
+    # on `labeled`, only for this label: another label must not start a run.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      contains(github.event.pull_request.labels.*.name, 'lago-packages bases')
+      (contains(github.event.pull_request.labels.*.name, 'lago-packages bases') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'lago-packages bases'))
     permissions: {contents: read, id-token: write, pull-requests: write}
     uses: getlago/lago-packages/.github/workflows/base-notes.yaml@<sha>   # pin by SHA
     with:
       pr: ${{ github.event.pull_request.number || inputs.pr }}
 ```
 
-Test `pairs.sh`, which reads the PR diff: `.github/actions/base-notes/pairs.test.sh`.
+Tests, offline: `.github/actions/base-notes/pairs.test.sh`, `notes.test.sh`, and
+`.github/actions/base-refresh/describe.test.sh`.
 
 ## Verifying
 

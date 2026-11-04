@@ -5,7 +5,8 @@
 # What: the apk packages of the base layers, old image against new image.
 # Why: the OS CVEs (Trivy, any severity) the new image no longer has.
 # Best effort: a failed lookup prints a note, never fails the bump.
-# Needs jq, crane and trivy, logged in to the registry.
+# Needs jq, crane and trivy, logged in to the registry. NO_FIX_NOTE replaces
+# the line for a new image that fixes no OS finding.
 set -uo pipefail
 # join needs the byte order that sort uses.
 export LC_ALL=C
@@ -54,6 +55,8 @@ describe() {
   # The base layers of both images, counted on the new base. A base whose
   # layer count changed between builds compares the wrong layers.
   n=$(crane config "$base" | jq '.rootfs.diff_ids | length' 2>/dev/null)
+  # a base compared with an older build of itself: every layer is a base layer.
+  [[ $base == "$new" ]] && n=1000
   if [[ -n $n ]] && packages "$old" "$n" >"$tmp/old" && packages "$new" "$n" >"$tmp/new"; then
     join -a1 -a2 -e '-' -o 0,1.2,2.2 "$tmp/old" "$tmp/new" | awk '$2 != $3' >"$tmp/diff"
     if [[ -s $tmp/diff ]]; then
@@ -83,7 +86,7 @@ describe() {
       echo
       by_cve <<<"$fixed"
     else
-      echo "Fixes no OS finding. It keeps the image on the current base, so the next fix lands with no extra build."
+      echo "${NO_FIX_NOTE:-Fixes no OS finding. It keeps the image on the current base, so the next fix lands with no extra build.}"
     fi
     if [[ -n $added ]]; then
       echo
@@ -104,7 +107,7 @@ if [[ $(grep -c . <<<"$pairs") -le 1 ]]; then
   describe "$pairs"
 else
   while read -r pair; do
-    echo "## \`$(jq -r '(.repository | split("/") | last) + "\`: \`" + .old + " → " + .tag' <<<"$pair")\`"
+    echo "## \`$(jq -r '(.repository | split("/") | last) + "`: `" + .old + " → " + .tag' <<<"$pair")\`"
     echo
     describe "$pair" | sed 's/^### /#### /'
     echo
