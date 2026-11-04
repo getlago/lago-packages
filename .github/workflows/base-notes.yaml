@@ -1,0 +1,56 @@
+name: Base notes
+
+# Comments on a PR that moves lago-packages bases (Renovate's "lago-packages
+# bases" PRs) with what changed between the old and new base: the apk package
+# diff and the OS CVEs it fixes (describe.sh, as in the base-refresh PRs).
+# Renovate has no release notes to show for a base tag, and it rewrites the
+# PR body on every rebase, so the notes go in one comment, updated in place.
+on:
+  workflow_call:
+    inputs:
+      pr:
+        description: Number of the PR to describe, in the calling repository.
+        type: number
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+jobs:
+  notes:
+    runs-on: ubuntu-latest
+    steps:
+      # the commit this workflow runs from, so a caller that pins it by SHA
+      # also pins the scripts.
+      - id: sha
+        run: |
+          jwt=$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=lago-packages-base-notes" | jq -r .value)
+          claims=$(cut -d. -f2 <<<"$jwt" | tr '_-' '/+')
+          claims=$(printf '%s%s' "$claims" "$(printf '%*s' $(( (4 - ${#claims} % 4) % 4 )) '' | tr ' ' =)" | base64 -d)
+          ref=$(jq -r .job_workflow_ref <<<"$claims")
+          sha=$(jq -r .job_workflow_sha <<<"$claims")
+          [[ $ref == getlago/lago-packages/.github/workflows/base-notes.yaml@* && $sha =~ ^[0-9a-f]{40}$ ]] ||
+            { echo "::error::unexpected job_workflow_ref $ref"; exit 1; }
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          repository: getlago/lago-packages
+          ref: ${{ steps.sha.outputs.sha }}
+          sparse-checkout: |
+            .github/actions/base-notes
+            .github/actions/base-refresh
+      - run: |
+          echo "$GITHUB_WORKSPACE/.github/actions/base-notes" >>"$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/.github/actions/base-refresh" >>"$GITHUB_PATH"
+      - uses: aquasecurity/setup-trivy@v0.3.1
+      - uses: imjasonh/setup-crane@v0.7
+        with:
+          version: v0.20.2
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+        run: notes.sh

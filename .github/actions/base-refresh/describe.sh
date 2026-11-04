@@ -104,7 +104,7 @@ if [[ $(grep -c . <<<"$pairs") -le 1 ]]; then
   describe "$pairs"
 else
   while read -r pair; do
-    echo "## \`$(jq -r '.old + " → " + .tag' <<<"$pair")\`"
+    echo "## \`$(jq -r '(.repository | split("/") | last) + "\`: \`" + .old + " → " + .tag' <<<"$pair")\`"
     echo
     describe "$pair" | sed 's/^### /#### /'
     echo

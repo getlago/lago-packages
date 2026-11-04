@@ -285,6 +285,36 @@ ARG GOTENBERG_SHA256=11b3ec38...
 
 Example: getlago/lago-gotenberg `.github/workflows/pr.yaml`.
 
+## Base notes (Renovate)
+
+Renovate has no release notes for a base tag, so its `lago-packages bases`
+PR shows only the tags. `base-notes.yaml` adds what moved: one comment, kept
+up to date on each rebase, with the apk packages that changed in the base
+layers and the OS CVEs the new base fixes (`describe.sh`, the same sections as
+a base-refresh PR).
+
+```yaml
+# Consumer: .github/workflows/base-notes.yaml
+name: Base notes
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+    inputs:
+      pr: {description: PR number, type: number, required: true}
+jobs:
+  notes:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'lago-packages bases')
+    permissions: {contents: read, id-token: write, pull-requests: write}
+    uses: getlago/lago-packages/.github/workflows/base-notes.yaml@<sha>   # pin by SHA
+    with:
+      pr: ${{ github.event.pull_request.number || inputs.pr }}
+```
+
+Test `pairs.sh`, which reads the PR diff: `.github/actions/base-notes/pairs.test.sh`.
+
 ## Verifying
 
 ```sh
