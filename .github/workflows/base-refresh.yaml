@@ -9,7 +9,8 @@ name: Base refresh
 # repository (its base-rebuild.yaml calls rebuild.yaml, with its own secrets
 # and registry access): dispatch.sh starts it and waits. A pin without one is
 # built here, for an image that needs no secret. bump.sh opens the PR, with
-# the base package changes and the fixed CVEs (describe.sh) in its body.
+# the base package changes and the fixed CVEs (describe.sh) in its body, only
+# when the rebuild fixes an OS finding (gate.sh, `min-severity`, `force`).
 on:
   workflow_call:
     inputs:
@@ -29,6 +30,16 @@ on:
         description: Repository prefix for a pin with no `repository` (<prefix>/<name>).
         type: string
         default: ''
+      min-severity:
+        description: >-
+          Open a bump PR only when the rebuild fixes an OS finding at this
+          severity or above (LOW, MEDIUM, HIGH, CRITICAL). An open PR is still updated.
+        type: string
+        default: LOW
+      force:
+        description: Open the bump PRs even when the rebuild fixes no finding.
+        type: boolean
+        default: false
     secrets:
       pr-token:
         description: >-
@@ -209,6 +220,8 @@ jobs:
         env:
           PINS: ${{ toJson(matrix.pins) }}
           GH_TOKEN: ${{ secrets.pr-token }}
+          MIN_SEVERITY: ${{ inputs.min-severity }}
+          FORCE: ${{ inputs.force }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           # The caller's event: set on a base-updated dispatch only.
           TRIGGER_URL: ${{ github.event.client_payload.run }}
