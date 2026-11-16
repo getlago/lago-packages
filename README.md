@@ -203,8 +203,9 @@ jobs:
       pins: .github/base-refresh/pins.yaml
       ecr-role: arn:aws:iam::<account>:role/<pulls the pinned repos>
       ecr-push-role: arn:aws:iam::<account>:role/<pushes the in-place images>   # only if some pin has no builder
+      app-client-id: ${{ vars.BASE_REFRESH_APP_CLIENT_ID }}
     secrets:
-      pr-token: ${{ secrets.BASE_REFRESH_PR_TOKEN }}
+      app-private-key: ${{ secrets.BASE_REFRESH_APP_PRIVATE_KEY }}
 ```
 
 ```yaml
@@ -252,10 +253,16 @@ The deployed tag must be `<commit>`, `<word>-<commit>` or either with
 no `ARG RUNTIME_IMAGE`, so a pin can be added before the image moves to a
 lago-packages base.
 
-`pr-token`, fine-grained: contents + pull requests write on the repository
-that holds the tags, contents read on each `source`, actions write on each
-`builder`. Actions write can start any workflow of the builder, so a builder
-should have no other `workflow_dispatch` workflow that deploys.
+The GitHub App (`app-client-id`, `app-private-key`): permissions contents
+write, pull requests write and actions write, no webhook, installed on the
+repository that holds the tags, on each `source` and on each `builder`. Each
+job mints a token for one hour, with only what it needs: the plan reads
+(contents read), a dispatch starts runs in its builder only (actions write),
+a refresh pushes and opens the PR in the calling repository only (contents +
+pull requests write), and a build reads its `source` only. Actions write can
+start any workflow of the builder, so a builder should have no other
+`workflow_dispatch` workflow that deploys. The PRs are authored by the App, so
+any maintainer can approve them.
 
 `rebuild.yaml` accepts only a full commit SHA, a `ghcr.io/getlago/<base>@sha256:`
 base and a `<release>-base.<digest12>` tag that matches that base: a dispatch
