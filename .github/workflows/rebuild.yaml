@@ -62,6 +62,10 @@ on:
         description: One id=value per line.
         required: false
 
+defaults:
+  run:
+    shell: nu {0}
+
 jobs:
   # Anyone who can dispatch the caller sets these, and the shared build pastes
   # build args into a shell step that holds the registry keys and build
@@ -69,16 +73,28 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      - uses: hustcer/setup-nu@v3.29
+        with:
+          version: "0.116.1"
       - env:
           COMMIT: ${{ inputs.commit }}
           BASE: ${{ inputs.base }}
           TAG: ${{ inputs.tag }}
         run: |
-          [[ $COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "::error::commit must be a full SHA"; exit 1; }
-          [[ $BASE =~ ^ghcr\.io/getlago/[a-z0-9-]+@sha256:([0-9a-f]{64})$ ]] || { echo "::error::base must be ghcr.io/getlago/<base>@sha256:<digest>"; exit 1; }
-          digest=${BASH_REMATCH[1]}
-          [[ $TAG =~ ^[A-Za-z0-9._-]{1,100}-base\.([0-9a-f]{12})$ && ${BASH_REMATCH[1]} == "${digest:0:12}" ]] ||
-            { echo "::error::tag must be <release>-base.<first 12 of the base digest>"; exit 1; }
+          if $env.COMMIT !~ '^[0-9a-f]{40}$' {
+            print "::error::commit must be a full SHA"
+            exit 1
+          }
+          let base = $env.BASE | parse -r '^ghcr\.io/getlago/[a-z0-9-]+@sha256:(?<digest>[0-9a-f]{64})$'
+          if ($base | is-empty) {
+            print "::error::base must be ghcr.io/getlago/<base>@sha256:<digest>"
+            exit 1
+          }
+          let tag = $env.TAG | parse -r '^[A-Za-z0-9._-]{1,100}-base\.(?<short>[0-9a-f]{12})$'
+          if ($tag | is-empty) or $tag.0.short != ($base.0.digest | str substring 0..<12) {
+            print "::error::tag must be <release>-base.<first 12 of the base digest>"
+            exit 1
+          }
 
   build:
     needs: check

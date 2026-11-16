@@ -106,10 +106,10 @@ flowchart TD
   subgraph CO["deploy repository (private, holds the lago-api tag)"]
     T2(["daily 09:30 UTC<br/>by hand"])
     RB["refresh-bases.yaml<br/>calls base-refresh.yaml"]
-    PL["plan.sh<br/>pins not on the newest base"]
-    DI["dispatch.sh<br/>lago-api pin has a builder"]
+    PL["plan.nu<br/>pins not on the newest base"]
+    DI["dispatch.nu<br/>lago-api pin has a builder"]
     BR["base-rebuild.yaml (builder)<br/>calls rebuild.yaml with the lago-api Dockerfile<br/>push &lt;sha&gt;-base.&lt;digest12&gt;"]
-    RF["refresh job<br/>Trivy, bump.sh, describe.sh"]
+    RF["refresh job<br/>Trivy, bump.nu, describe.nu"]
     PR["PR base-refresh/api<br/>tag diff, base packages, fixed CVEs"]
     T2 --> RB --> PL --> DI
     RF --> PR
@@ -210,7 +210,7 @@ jobs:
 ```yaml
 # Builder: .github/workflows/base-rebuild.yaml (must be on the default branch)
 name: Base rebuild
-run-name: base rebuild ${{ inputs.tag }} ${{ inputs.nonce }}   # dispatch.sh finds the run by the nonce
+run-name: base rebuild ${{ inputs.tag }} ${{ inputs.nonce }}   # dispatch.nu finds the run by the nonce
 on:
   workflow_dispatch:
     inputs:
@@ -290,7 +290,7 @@ Example: getlago/lago-gotenberg `.github/workflows/pr.yaml`.
 Renovate has no release notes for a base tag, so its `lago-packages bases`
 PR shows only the tags. `base-notes.yaml` adds what moved: one comment, kept
 up to date on each rebase, with the apk packages that changed in the base
-layers and the OS CVEs the new base fixes (`describe.sh`, the same sections as
+layers and the OS CVEs the new base fixes (`describe.nu`, the same sections as
 a base-refresh PR).
 
 ```yaml
@@ -314,9 +314,6 @@ jobs:
     with:
       pr: ${{ github.event.pull_request.number || inputs.pr }}
 ```
-
-Tests, offline: `.github/actions/base-notes/pairs.test.sh`, `notes.test.sh`, and
-`.github/actions/base-refresh/describe.test.sh`.
 
 ## Verifying
 
