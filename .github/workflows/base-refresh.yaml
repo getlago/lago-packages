@@ -171,7 +171,8 @@ jobs:
         env:
           BUILDER: ${{ matrix.pin.builder }}
         run: echo "name=${BUILDER#*/}" >>"$GITHUB_OUTPUT"
-      # Starts and watches the builder's run, in the builder only.
+      # Starts and watches the builder's run, in the builder only. Contents
+      # read: `gh workflow run` with no --ref reads the default branch.
       - id: app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -180,6 +181,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ steps.builder.outputs.name }}
           permission-actions: write
+          permission-contents: read
       - env:
           PIN: ${{ toJson(matrix.pin) }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
