@@ -131,7 +131,7 @@ jobs:
       contents: read
       id-token: write
       packages: write
-    uses: getlago/lago/.github/workflows/docker-build-multi-arch.yaml@c27afdbbf80999596110d871f1e456a9b2e9b1cf # getlago/lago#865 (App checkout)
+    uses: getlago/lago/.github/workflows/docker-build-multi-arch.yaml@01072375f49e12a0cb35b9761e22a3b66d8802e6 # main, with the App checkout (getlago/lago#865)
     with:
       image-name: ${{ matrix.pin.repository }}
       # Empty for an image built in the calling repository.
