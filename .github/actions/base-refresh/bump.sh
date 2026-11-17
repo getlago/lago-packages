@@ -15,8 +15,16 @@ Only `RUNTIME_IMAGE` is set. The build stage uses the Dockerfile's default build
 MD
 
 pins=$(cat)
+name=$(jq -rs '.[0].name' <<<"$pins")
+BRANCH=base-refresh/$name
+TITLE="chore($name): rebuild on the fresh lago-packages base"
+# Edit on the newest main, not the ref this run checked out: main can move
+# the same files during the builds, and the checkout would then refuse.
+git fetch -q origin main
+git checkout -q -B "$BRANCH" origin/main
+
+applied=
 while read -r pin; do
-  name=$(jq -r .name <<<"$pin")
   file=$(jq -r .file <<<"$pin")
   path=$(jq -r .path <<<"$pin")
   old=$(jq -r .old <<<"$pin")
@@ -24,6 +32,13 @@ while read -r pin; do
   # Change only `<key>: [<repository>:]<old>`: yq -i would reformat the whole
   # file.
   match="^([[:space:]]*${path##*.}: [\"']?([^[:space:]\"']*:)?)${old//./\\.}([\"']?[[:space:]]*(#.*)?)$"
+  # Main moved the tag since the plan: the rebuild is of a commit that is no
+  # longer deployed. The next refresh plans the new one.
+  current=$(yq "$path" "$file")
+  if [[ ${current##*:} != "$old" ]]; then
+    echo "::notice::$file: $path is ${current##*:} on main, not $old: skipped" >&2
+    continue
+  fi
   if [[ $(grep -cE "$match" "$file") != 1 ]]; then
     echo "$file: no single line for $path: $old" >&2
     exit 1
@@ -32,7 +47,9 @@ while read -r pin; do
   value=$(yq "$path" "$file")
   [[ ${value##*:} == "$new" ]] || { echo "$file: $path is not $new" >&2; exit 1; }
   echo "- \`$file\` \`$path\`: \`$old\` → \`$new\`" >>"$body"
+  applied+=$pin$'\n'
 done <<<"$pins"
+pins=$applied
 
 if git diff --quiet; then
   echo "No tag to change." >&2
@@ -59,11 +76,6 @@ if (( $(wc -c <"$body") > 60000 )); then
   mv "$body.cut" "$body"
 fi
 
-BRANCH=base-refresh/$name
-TITLE="chore($name): rebuild on the fresh lago-packages base"
-# From main, whatever ref this run checked out. The edits carry over.
-git fetch -q origin main
-git checkout -B "$BRANCH" origin/main
 git commit -qam "$TITLE"
 git push --force origin "$BRANCH"
 
