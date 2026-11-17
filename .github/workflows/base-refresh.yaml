@@ -29,13 +29,17 @@ on:
         description: Repository prefix for a pin with no `repository` (<prefix>/<name>).
         type: string
         default: ''
-    secrets:
-      pr-token:
+      app-client-id:
         description: >-
-          Opens the PRs here (contents + pull requests write), reads the
-          `source` repositories (contents read) and starts the `builder`
-          runs (actions write). A PR opened with GITHUB_TOKEN does not start CI.
-          Never handed to a build whose pin has no `source`.
+          Client ID of the GitHub App that opens the PRs here, reads the
+          `source` repositories and starts the `builder` runs. Each job mints
+          its own token, limited to the repositories and permissions it needs.
+          A PR opened with GITHUB_TOKEN does not start CI.
+        type: string
+        required: true
+    secrets:
+      app-private-key:
+        description: Private key of the GitHub App in app-client-id.
         required: true
 
 permissions:
@@ -94,11 +98,19 @@ jobs:
           path: .base-refresh
           sparse-checkout: .github/actions/base-refresh
       - run: echo "$GITHUB_WORKSPACE/.base-refresh/.github/actions/base-refresh" >>"$GITHUB_PATH"
+      # Reads the `source` repositories.
+      - id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ inputs.app-client-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: read
       - id: plan
         env:
           PINS: ${{ inputs.pins }}
           ECR: ${{ inputs.ecr }}
-          GH_TOKEN: ${{ secrets.pr-token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           plan.sh >pins.jsonl
           # One refresh job per image, so its pins land in one PR. One build
@@ -119,7 +131,7 @@ jobs:
       contents: read
       id-token: write
       packages: write
-    uses: getlago/lago/.github/workflows/docker-build-multi-arch.yaml@117b8219da7ad92631d47018ace3896f26201161 # main 2026-10-21
+    uses: getlago/lago/.github/workflows/docker-build-multi-arch.yaml@01072375f49e12a0cb35b9761e22a3b66d8802e6 # main, with the App checkout (getlago/lago#865)
     with:
       image-name: ${{ matrix.pin.repository }}
       # Empty for an image built in the calling repository.
@@ -133,9 +145,10 @@ jobs:
       default-tags: false
       tags: type=raw,value=${{ matrix.pin.tag }}
       build-args: RUNTIME_IMAGE=${{ matrix.pin.base }}
+      # Only to check out a `source` repository: a read-only token for it.
+      app-client-id: ${{ matrix.pin.source != '' && inputs.app-client-id || '' }}
     secrets:
-      # Only to check out a `source` repository.
-      repository-token: ${{ matrix.pin.source != '' && secrets.pr-token || '' }}
+      app-private-key: ${{ matrix.pin.source != '' && secrets.app-private-key || '' }}
 
   dispatch:
     needs: [scripts, plan]
@@ -154,9 +167,22 @@ jobs:
           path: .base-refresh
           sparse-checkout: .github/actions/base-refresh
       - run: echo "$GITHUB_WORKSPACE/.base-refresh/.github/actions/base-refresh" >>"$GITHUB_PATH"
+      - id: builder
+        env:
+          BUILDER: ${{ matrix.pin.builder }}
+        run: echo "name=${BUILDER#*/}" >>"$GITHUB_OUTPUT"
+      # Starts and watches the builder's run, in the builder only.
+      - id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ inputs.app-client-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.builder.outputs.name }}
+          permission-actions: write
       - env:
           PIN: ${{ toJson(matrix.pin) }}
-          GH_TOKEN: ${{ secrets.pr-token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           NONCE: ${{ github.run_id }}-${{ github.run_attempt }}
         run: dispatch.sh
 
@@ -172,10 +198,22 @@ jobs:
       matrix:
         pins: ${{ fromJson(needs.plan.outputs.pins) }}
     steps:
+      - id: caller
+        run: echo "name=${GITHUB_REPOSITORY#*/}" >>"$GITHUB_OUTPUT"
+      # Pushes the branch and opens the PR, in the calling repository only.
+      - id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ inputs.app-client-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.caller.outputs.name }}
+          permission-contents: write
+          permission-pull-requests: write
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          token: ${{ secrets.pr-token }}
+          token: ${{ steps.app-token.outputs.token }}
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ inputs.ecr-role }}
@@ -208,7 +246,7 @@ jobs:
           jq -c '.[]' <<<"$PINS" | bump.sh
         env:
           PINS: ${{ toJson(matrix.pins) }}
-          GH_TOKEN: ${{ secrets.pr-token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           # The caller's event: set on a base-updated dispatch only.
           TRIGGER_URL: ${{ github.event.client_payload.run }}
