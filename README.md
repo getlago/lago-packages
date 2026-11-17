@@ -257,7 +257,8 @@ The GitHub App (`app-client-id`, `app-private-key`): permissions contents
 write, pull requests write and actions write, no webhook, installed on the
 repository that holds the tags, on each `source` and on each `builder`. Each
 job mints a token for one hour, with only what it needs: the plan reads
-(contents read), a dispatch starts runs in its builder only (actions write),
+(contents read), a dispatch starts runs in its builder only (actions write, contents
+read),
 a refresh pushes and opens the PR in the calling repository only (contents +
 pull requests write), and a build reads its `source` only. Actions write can
 start any workflow of the builder, so a builder should have no other

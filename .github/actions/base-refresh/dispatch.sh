@@ -3,7 +3,7 @@
 # plan.sh object ($PIN), then waits for that run. The builder rebuilds with
 # its own secrets and registry access. Its run-name must be
 # "base rebuild <tag> <nonce>", so this script finds the run. Needs gh
-# (GH_TOKEN with actions write on the builder) and jq. `builder-ref` picks
+# (GH_TOKEN with actions write and contents read on the builder) and jq. `builder-ref` picks
 # the branch, for a test.
 set -euo pipefail
 field() { jq -r ".$1 // \"\"" <<<"$PIN"; }
