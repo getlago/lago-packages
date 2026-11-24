@@ -75,8 +75,10 @@ repositories (the private repositories that hold the deployed tags). There, the
 base refresh rebuilds the deployed images on the new digests and bumps their
 GitOps tags: see [Base refresh](#base-refresh-for-consumers).
 
-The dispatch needs the `BASE_UPDATE_DISPATCH_TOKEN` secret (a token with
-`contents: write` on each deploy repository). The deploy repositories also run
+The dispatch authenticates as the base-refresh GitHub App (the
+`BASE_REFRESH_APP_CLIENT_ID` variable and the `BASE_REFRESH_APP_PRIVATE_KEY`
+secret, see [Base refresh](#base-refresh-for-consumers)). It mints a one-hour
+token with `contents: write` on one deploy repository per notice. The deploy repositories also run
 the refresh daily, so a missed dispatch only delays a refresh.
 
 ## Base refresh (for consumers)

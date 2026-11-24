@@ -257,17 +257,29 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        repository: [getlago/lago-deploy, getlago/lago-infrastructure]
+        repository: [lago-deploy, lago-infrastructure]
     env:
       # Without it the consumers catch up on their daily run.
-      HAS_TOKEN: ${{ secrets.BASE_UPDATE_DISPATCH_TOKEN != '' }}
+      HAS_APP: ${{ vars.BASE_REFRESH_APP_CLIENT_ID != '' }}
     steps:
-      # Cross-repo `contents: write`; GITHUB_TOKEN cannot do it.
+      # Cross-repo `contents: write`; GITHUB_TOKEN cannot do it. The base-refresh
+      # App mints a one-hour token for this repository only: a personal token
+      # expires and then every notice fails.
+      - name: Mint the App token
+        id: app-token
+        if: env.HAS_APP == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BASE_REFRESH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BASE_REFRESH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ matrix.repository }}
+          permission-contents: write
       - name: Dispatch base-updated
-        if: env.HAS_TOKEN == 'true'
+        if: env.HAS_APP == 'true'
         uses: peter-evans/repository-dispatch@v4
         with:
-          token: ${{ secrets.BASE_UPDATE_DISPATCH_TOKEN }}
-          repository: ${{ matrix.repository }}
+          token: ${{ steps.app-token.outputs.token }}
+          repository: ${{ github.repository_owner }}/${{ matrix.repository }}
           event-type: base-updated
           client-payload: ${{ needs.dispatch.outputs.payload }}
