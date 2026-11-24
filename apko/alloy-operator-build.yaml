@@ -1,0 +1,32 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    # Docker's `RUN <cmd>` form shells out via /bin/sh.
+    - busybox
+    - bash
+    # The build clones operator-sdk at a tag; `make build/helm-operator`
+    # drives the Go build with upstream's ldflags.
+    - git
+    - make
+    # operator-sdk v1.42.3 needs go >= 1.26.3. Wolfi's go-1.26 carries the
+    # newest 1.26 patch, so the stdlib fixes come with each base refresh.
+    - go-1.26
+
+environment:
+  PATH: /usr/local/bin:/usr/bin:/bin
+  # helm-operator is a static Go binary: no cgo, so the runtime base needs
+  # no libc beyond what wolfi-baselayout ships.
+  CGO_ENABLED: "0"
+
+archs:
+  - x86_64
+  - aarch64
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Wolfi-based builder image for alloy-operator (go-1.26)
