@@ -1,0 +1,38 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    # helm-operator dials the Kubernetes API over TLS.
+    - ca-certificates-bundle
+
+accounts:
+  groups:
+    - groupname: helm
+      gid: 1001
+  users:
+    - username: helm
+      uid: 1001
+      gid: 1001
+  run-as: 1001
+
+archs:
+  - x86_64
+  - aarch64
+
+# Upstream grafana/alloy-operator runs helm-operator from /opt/helm as uid
+# 1001, with watches.yaml and the Alloy chart next to it. Keeping the same
+# path and uid makes the Lago image a drop-in for the chart's securityContext.
+work-dir: /opt/helm
+
+environment:
+  HOME: /opt/helm
+
+entrypoint:
+  command: /usr/local/bin/helm-operator run --watches-file=./watches.yaml
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Hardened Wolfi-based runtime image for alloy-operator
