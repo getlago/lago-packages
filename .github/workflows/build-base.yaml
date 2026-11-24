@@ -363,16 +363,26 @@ jobs:
           TAG: ${{ steps.push.outputs.tag }}
         run: |
           set -euo pipefail
-          tags=(-t "$IMAGE:$TAG" -t "$IMAGE:latest")
+          extra=(latest)
           if crane digest "$IMAGE:${{ env.SRC_SHA }}" >/dev/null 2>&1; then
             echo "$IMAGE:${{ env.SRC_SHA }} exists, leaving it in place"
           else
-            tags+=(-t "$IMAGE:${{ env.SRC_SHA }}")
+            extra+=("${{ env.SRC_SHA }}")
           fi
-          # The annotation links the index to this run: bump PRs read it.
-          docker buildx imagetools create "${tags[@]}" \
-            --annotation "index:dev.getlago.build-run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            "$IMAGE:$TAG-x86_64" "$IMAGE:$TAG-aarch64"
+          # crane pushes apko's tarballs with Docker media types, and
+          # `docker buildx imagetools create --annotation` refuses to annotate a
+          # Docker manifest list ("annotations are not supported for Docker
+          # manifest lists"): every base publish failed here since the
+          # annotation came in. `crane index append` builds an OCI index (which
+          # may list Docker manifests), and jq adds the annotation that links
+          # the index to this run (bump PRs read it).
+          crane index append -t "$IMAGE:$TAG-index" \
+            -m "$IMAGE:$TAG-x86_64" -m "$IMAGE:$TAG-aarch64"
+          crane manifest "$IMAGE:$TAG-index" \
+            | jq -c --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+                '.annotations = {"dev.getlago.build-run": $run}' \
+            | crane edit manifest "$IMAGE:$TAG-index" -t "$IMAGE:$TAG"
+          for t in "${extra[@]}"; do crane tag "$IMAGE:$TAG" "$t"; done
           echo "digest=$(crane digest "$IMAGE:$TAG")" >> "$GITHUB_OUTPUT"
 
       - name: Install cosign
