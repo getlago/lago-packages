@@ -281,7 +281,7 @@ jobs:
 
       - name: Login to GHCR
         # GITHUB_TOKEN + `packages: write` is the only credential needed.
-        # Writes ~/.docker/config.json, which crane and buildx both read.
+        # Writes ~/.docker/config.json, which crane reads.
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -369,19 +369,21 @@ jobs:
           else
             extra+=("${{ env.SRC_SHA }}")
           fi
-          # crane pushes apko's tarballs with Docker media types, and
-          # `docker buildx imagetools create --annotation` refuses to annotate a
-          # Docker manifest list ("annotations are not supported for Docker
-          # manifest lists"): every base publish failed here since the
-          # annotation came in. `crane index append` builds an OCI index (which
-          # may list Docker manifests), and jq adds the annotation that links
-          # the index to this run (bump PRs read it).
-          crane index append -t "$IMAGE:$TAG-index" \
-            -m "$IMAGE:$TAG-x86_64" -m "$IMAGE:$TAG-aarch64"
-          crane manifest "$IMAGE:$TAG-index" \
+          # crane pushes apko's tarballs with Docker media types. A newer buildx
+          # (runner image 20261116+) refuses `imagetools create --annotation` on
+          # a Docker manifest list; the older one dropped the annotation without
+          # an error. `crane index append` builds an OCI index (it may list
+          # Docker manifests) from the digests Trivy scanned, straight on <tag>,
+          # and jq adds the annotation in place: base-refresh/bump.sh reads it.
+          manifests=()
+          for arch in x86_64 aarch64; do
+            manifests+=(-m "$IMAGE@$(crane digest --tarball "image-$arch.tar")")
+          done
+          crane index append -t "$IMAGE:$TAG" "${manifests[@]}"
+          crane manifest "$IMAGE:$TAG" \
             | jq -c --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-                '.annotations = {"dev.getlago.build-run": $run}' \
-            | crane edit manifest "$IMAGE:$TAG-index" -t "$IMAGE:$TAG"
+                '.annotations += {"dev.getlago.build-run": $run}' \
+            | crane edit manifest "$IMAGE:$TAG"
           for t in "${extra[@]}"; do crane tag "$IMAGE:$TAG" "$t"; done
           echo "digest=$(crane digest "$IMAGE:$TAG")" >> "$GITHUB_OUTPUT"
 
