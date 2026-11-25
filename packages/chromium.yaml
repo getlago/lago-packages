@@ -28,7 +28,7 @@
 # consumers (gotenberg-base.yaml, lago-gotenberg's Dockerfile) do not move.
 package:
   name: chromium
-  version: 157.0.8103.78
+  version: 158.0.8127.88
   epoch: 0
   description: Headless Chromium for gotenberg, repackaged from Chrome for Testing
   copyright:
@@ -61,11 +61,11 @@ pipeline:
       case "$(uname -m)" in
         aarch64)
           cft_arch=linux-arm64
-          sha256=912fbf877e53de34d7b3cca5104f3b95607d41bd35412ccc6cd2a599ff0c0dbf
+          sha256=9f89b7ef6574e4bbf6ddda9f17f1fab5626e93d6f7d852653232d0d3554df975
           ;;
         x86_64)
           cft_arch=linux64
-          sha256=f90329720fb61e5a76da9b6b509b6ad12a484c9c5df0359403e935177c6d153a
+          sha256=63401333cc587645bfaeea7f0c90958b327d249251e23954a47f30112ca23d5b
           ;;
         *)
           echo "::error::unsupported arch $(uname -m)" >&2
