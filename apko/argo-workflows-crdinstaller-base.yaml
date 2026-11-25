@@ -1,0 +1,40 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    # kubectl dials the Kubernetes API over TLS.
+    - ca-certificates-bundle
+    # Keep the minor in step with the clusters' Kubernetes minor. -default
+    # pulls kubectl-1.37 and links it to /usr/bin/kubectl.
+    - kubectl-1.37-default
+
+accounts:
+  groups:
+    - groupname: argo
+      gid: 8737
+  users:
+    - username: argo
+      uid: 8737
+      gid: 8737
+  run-as: 8737
+
+archs:
+  - x86_64
+  - aarch64
+
+# Upstream argoproj/argo-workflows-crdinstaller is kubectl run as uid 8737
+# with HOME=/tmp (kubectl writes its discovery cache under HOME). Keeping
+# both makes the Lago image a drop-in for the chart's CRD install Job, which
+# runs with readOnlyRootFilesystem and mounts an emptyDir on /tmp.
+environment:
+  HOME: /tmp
+
+entrypoint:
+  command: /usr/bin/kubectl
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Hardened Wolfi-based runtime image for the Argo Workflows CRD installer
