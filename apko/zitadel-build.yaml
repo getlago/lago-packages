@@ -21,10 +21,12 @@ contents:
     # toolchain (CGO_ENABLED=0); build-base below is for node-gyp.
     - go-1.26
     # The server embeds the Angular console, and `nx` drives the whole build,
-    # so node and pnpm are needed even for the Go binary. Upstream builds on
-    # node 22 (its CI `node_version`). Wolfi's pnpm sidesteps corepack, which
+    # so node and pnpm are needed even for the Go binary. nodejs-24, as in
+    # zitadel-login-build, which builds the same zitadel tree: upstream CI uses
+    # node 22, but Wolfi's nodejs-22 lags the fixes that Trivy gates on.
+    # Wolfi's pnpm sidesteps corepack, which
     # would enforce zitadel's `packageManager` pin and fail on any skew.
-    - nodejs-22
+    - nodejs-24
     - pnpm
     # node-gyp fallbacks in the console's dependency tree compile with these.
     - build-base
@@ -39,4 +41,4 @@ archs:
 
 annotations:
   org.opencontainers.image.source: https://github.com/getlago/lago-packages
-  org.opencontainers.image.description: Wolfi-based builder image for the zitadel server (go-1.26, nodejs-22, pnpm, git)
+  org.opencontainers.image.description: Wolfi-based builder image for the zitadel server (go-1.26, nodejs-24, pnpm, git)

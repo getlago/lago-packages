@@ -56,7 +56,7 @@ an SBOM, and every image is signed with cosign (keyless, via GitHub OIDC).
 | `ghcr.io/getlago/zitadel-login-base` | nodejs-24, busybox, nonroot | runtime stage of the Lago-branded zitadel login app |
 | `ghcr.io/getlago/zitadel-login-build` | nodejs-24, pnpm, git, patch, build-base | build stage of the zitadel login app |
 | `ghcr.io/getlago/zitadel-base` | ca-certificates, uid 1000, no shell | runtime stage of the zitadel server |
-| `ghcr.io/getlago/zitadel-build` | go-1.26, nodejs-22, pnpm, git, curl, bash, busybox, build-base | build stage of the zitadel server |
+| `ghcr.io/getlago/zitadel-build` | go-1.26, nodejs-24, pnpm, git, curl, bash, busybox, build-base | build stage of the zitadel server |
 
 All are multi-arch (`x86_64`, `aarch64`).
 
