@@ -1,0 +1,32 @@
+# Build stage of the Flink Kubernetes Operator image (built from the
+# apache/flink-kubernetes-operator release tag with Maven). Maven verifies
+# every artifact it downloads against Maven Central's checksums.
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    # The upstream license script (tools/license) is bash, with find -L,
+    # dirname and cp.
+    - bash
+    - busybox
+    - findutils
+    - git
+    # Full JDK (javac, jar). Java 17 to match flink-operator-base's JRE.
+    - openjdk-17
+    - maven-3.9
+
+environment:
+  JAVA_HOME: /usr/lib/jvm/java-17-openjdk
+  PATH: /usr/lib/jvm/java-17-openjdk/bin:/usr/local/bin:/usr/bin:/bin
+
+archs:
+  - x86_64
+  - aarch64
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Wolfi-based builder image for the Flink Kubernetes Operator (openjdk-17, maven-3.9)

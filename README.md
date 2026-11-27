@@ -61,6 +61,8 @@ an SBOM, and every image is signed with cosign (keyless, via GitHub OIDC).
 | `ghcr.io/getlago/tailscale-operator-base` | tailscale-k8s-operator (1.104.7), ca-certificates, no shell | Tailscale Kubernetes operator image |
 | `ghcr.io/getlago/pghero-base` | ruby-4.0, bundler, libpq, libxml2, libxslt, libyaml, nonroot, no shell | runtime stage of the PgHero image |
 | `ghcr.io/getlago/pghero-build` | ruby-4.0 + headers, bundler, build-base, libpq/libxml2/libxslt/libyaml headers, busybox | build stage of the PgHero image |
+| `ghcr.io/getlago/flink-operator-base` | openjdk-17-jre, bash, busybox, libjemalloc2, tzdata, flink uid 9999 | runtime of the Flink Kubernetes Operator image (operator and webhook) |
+| `ghcr.io/getlago/flink-operator-build` | openjdk-17 (JDK), maven-3.9, git, bash, busybox, findutils | build stage of the Flink Kubernetes Operator image |
 
 All are multi-arch (`x86_64`, `aarch64`).
 
