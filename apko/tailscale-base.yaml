@@ -16,6 +16,10 @@ contents:
     - iptables
     - ip6tables
     - iproute2
+    # The operator adds a `sysctler` init container to every proxy pod. It runs
+    # `/bin/sh -c "echo 1 > /proc/sys/net/ipv4/ip_forward ..."` with this image,
+    # so the image needs a shell. Upstream ships busybox for the same reason.
+    - busybox
 
 # Upstream tailscale/tailscale installs containerboot, tailscale and tailscaled
 # in /usr/local/bin and runs containerboot as root: the proxy needs NET_ADMIN
