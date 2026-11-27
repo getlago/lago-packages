@@ -1,0 +1,24 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    # The operator dials the Kubernetes API and the Tailscale API over TLS.
+    - ca-certificates-bundle
+    # Keep the version in step with the tailscale-operator chart and
+    # tailscale-base. The package installs /usr/local/bin/operator, the path
+    # of upstream tailscale/k8s-operator.
+    - tailscale-k8s-operator~1.104.7
+
+archs:
+  - x86_64
+  - aarch64
+
+entrypoint:
+  command: /usr/local/bin/operator
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Hardened Wolfi-based runtime image for the Tailscale Kubernetes operator
