@@ -1,0 +1,52 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    # tailscaled dials the coordination server and DERP relays over TLS.
+    - ca-certificates-bundle
+    # Keep the version in step with the tailscale-operator chart and
+    # tailscale-operator-base: the operator expects proxies of its own version.
+    - tailscale~1.104.7
+    - tailscale-containerboot~1.104.7
+    # tailscaled programs the kernel firewall and routes of a subnet router or
+    # an egress proxy. Upstream tailscale/tailscale ships the same three tools.
+    - iptables
+    - ip6tables
+    - iproute2
+
+# Upstream tailscale/tailscale installs containerboot, tailscale and tailscaled
+# in /usr/local/bin and runs containerboot as root: the proxy needs NET_ADMIN
+# to set up routing. Wolfi installs them in /usr/bin; the links below keep the
+# upstream paths, so the image is a drop-in for the operator's proxy pods.
+paths:
+  - path: /usr/local/bin
+    type: directory
+    permissions: 0o755
+  - path: /usr/local/bin/containerboot
+    type: symlink
+    source: /usr/bin/containerboot
+    # apko applies a symlink's permissions to its target: without this line
+    # the binary ends up mode 0000.
+    permissions: 0o755
+  - path: /usr/local/bin/tailscale
+    type: symlink
+    source: /usr/bin/tailscale
+    permissions: 0o755
+  - path: /usr/local/bin/tailscaled
+    type: symlink
+    source: /usr/bin/tailscaled
+    permissions: 0o755
+
+archs:
+  - x86_64
+  - aarch64
+
+entrypoint:
+  command: /usr/local/bin/containerboot
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Hardened Wolfi-based runtime image for Tailscale proxies (containerboot, tailscaled)

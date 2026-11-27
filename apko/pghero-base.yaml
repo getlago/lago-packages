@@ -1,0 +1,57 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    # PgHero reads cloud metrics over TLS and can connect to Postgres with TLS.
+    - ca-certificates-bundle
+    - ruby-4.0
+    # Rails loads bundler/setup at boot.
+    - ruby4.0-bundler
+    - libpq
+    # Shared libraries of the nokogiri and psych native extensions.
+    - libxml2
+    - libxslt
+    - yaml
+
+accounts:
+  groups:
+    - groupname: nonroot
+      gid: 65532
+  users:
+    - username: nonroot
+      uid: 65532
+      gid: 65532
+  run-as: 65532
+
+# Upstream ankane/pghero runs puma from /app with the gems in /usr/local/bundle
+# and listens on PORT 8080. Keeping the paths and the port makes the Lago image
+# a drop-in for existing deployments.
+environment:
+  LANG: C.UTF-8
+  PORT: "8080"
+  RAILS_ENV: production
+  GEM_HOME: /usr/local/bundle
+  BUNDLE_APP_CONFIG: /usr/local/bundle
+  BUNDLE_WITHOUT: "development test"
+  # Run Wolfi's bundler, not the BUNDLED WITH version of the lockfile: bundler
+  # would otherwise install that version and re-exec into it.
+  BUNDLE_VERSION: system
+  PATH: /usr/local/bundle/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
+work-dir: /app
+
+# The image has no /usr/bin/env, so the `#!/usr/bin/env ruby` binstub cannot
+# start on its own: ruby runs it.
+entrypoint:
+  command: /usr/bin/ruby /usr/local/bundle/bin/puma -C /app/config/puma.rb
+
+archs:
+  - x86_64
+  - aarch64
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Hardened Wolfi-based runtime image for PgHero

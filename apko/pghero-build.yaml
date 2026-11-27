@@ -1,0 +1,33 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - busybox
+    # Every gem with a native extension compiles from source (pg, pg_query,
+    # google-protobuf, nokogiri, psych), against the system libraries below.
+    - build-base
+    - ruby-4.0
+    - ruby-4.0-dev
+    - ruby4.0-bundler
+    # libpq headers for the pg gem.
+    - postgresql-dev
+    # nokogiri links Wolfi's libxml2 and libxslt, not vendored copies.
+    - libxml2-dev
+    - libxslt-dev
+    # psych (YAML) links libyaml.
+    - yaml-dev
+
+environment:
+  PATH: /usr/local/bin:/usr/bin:/bin
+
+archs:
+  - x86_64
+  - aarch64
+
+annotations:
+  org.opencontainers.image.source: https://github.com/getlago/lago-packages
+  org.opencontainers.image.description: Wolfi-based builder image for PgHero (ruby-4.0 + headers + libpq-dev)

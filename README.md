@@ -57,6 +57,10 @@ an SBOM, and every image is signed with cosign (keyless, via GitHub OIDC).
 | `ghcr.io/getlago/zitadel-login-build` | nodejs-24, pnpm, git, patch, build-base | build stage of the zitadel login app |
 | `ghcr.io/getlago/zitadel-base` | ca-certificates, uid 1000, no shell | runtime stage of the zitadel server |
 | `ghcr.io/getlago/zitadel-build` | go-1.26, nodejs-24, pnpm, git, curl, bash, busybox, build-base | build stage of the zitadel server |
+| `ghcr.io/getlago/tailscale-base` | tailscale + containerboot (1.104.7), iptables, ip6tables, iproute2, upstream `/usr/local/bin` paths, no shell | Tailscale proxy image (subnet routers, egress proxies) |
+| `ghcr.io/getlago/tailscale-operator-base` | tailscale-k8s-operator (1.104.7), ca-certificates, no shell | Tailscale Kubernetes operator image |
+| `ghcr.io/getlago/pghero-base` | ruby-4.0, bundler, libpq, libxml2, libxslt, libyaml, nonroot, no shell | runtime stage of the PgHero image |
+| `ghcr.io/getlago/pghero-build` | ruby-4.0 + headers, bundler, build-base, libpq/libxml2/libxslt/libyaml headers, busybox | build stage of the PgHero image |
 
 All are multi-arch (`x86_64`, `aarch64`).
 
